@@ -11,6 +11,13 @@ import download_archive as archive
 
 
 class DownloadArchiveTests(unittest.TestCase):
+    def test_checklist_scope_distinguishes_full_snapshots_and_business_dates(self):
+        item={'start':'2026-10-01','end':'2026-10-31'}
+        for dataset in ('lanorange_rider_quit','baize_employees','abnormal_riders'):
+            self.assertEqual(archive.artifact_scope({**item,'dataset':dataset}),('全量',''))
+        self.assertEqual(archive.artifact_scope({**item,'dataset':'rider_archive'}),('当前快照',''))
+        self.assertEqual(archive.artifact_scope({**item,'dataset':'rider_monthly'}),('2026-10-01','2026-10-31'))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
         self.addCleanup(self.temp.cleanup)

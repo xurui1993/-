@@ -88,11 +88,13 @@ def group_records(runs):
             'phase': active[-1].get('phase') if active else None,
             'files': files, 'available_files': sum(file.get('available', True) for file in files),
             'total_items': len(items), 'completed_items': succeeded, 'failed_items': len(failed),
+            'incomplete_items': [{key: item.get(key, '') for key in ('city', 'dataset', 'start', 'end', 'status')} for item in failed],
             'action_run_id': target, 'member_ids': [run['id'] for run in members],
             'attempts': [{key: run.get(key) for key in ('id', 'created_at', 'status', 'retry_of', 'recovery_of', 'archive_code')} for run in members],
             'incomplete_lineage': bool(root.get('retry_of') or root.get('recovery_of')),
             'summary_issue': bool(summary_failures),
             'lanorange_full_delivery': root.get('lanorange_full_delivery', False),
+            'result_layout': root.get('result_layout', 1),
         })
     return sorted(records, key=lambda record: record['updated_at'], reverse=True)
 
@@ -111,8 +113,13 @@ def get_record(manager, owner, record_id):
 
 def record_bundle(manager, owner, record_id, city=None, purpose='results'):
     from download_jobs import DownloadNotFound, DownloadArchiveError
-    from download_archive import archive_component
+    from download_archive import archive_component, artifact_scope
     record = get_record(manager, owner, record_id)
+    if purpose == 'sources':
+        return review_bundle(manager,owner,record_id,city)
+    if record.get('result_layout')==3 and record['status'] not in ACTIVE:
+        manager.publish_delivery(owner,record_id)
+        record=get_record(manager,owner,record_id)
     from task_catalog import GENERATORS
     targets = {value for value in record['datasets'] if value in GENERATORS}
     if purpose not in ('results', 'sources'):
@@ -135,7 +142,20 @@ def record_bundle(manager, owner, record_id, city=None, purpose='results'):
                    'files': entries, 'unavailable': [file for file in eligible if not file.get('available', True)],
                    'note': '汇集关联任务当前可用版本，原始处理记录与文件未修改。'}
         with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
-            archive.writestr('下载说明.json', json.dumps(receipt, ensure_ascii=False, indent=2))
+            if record.get('result_layout',1) < 3:
+                archive.writestr('下载说明.json', json.dumps(receipt, ensure_ascii=False, indent=2))
+            if record.get('result_layout',1) >= 2:
+                import csv
+                import io
+                table = io.StringIO(newline='')
+                writer = csv.writer(table)
+                writer.writerow(['任务编号','任务状态','城市','资料','开始日期','结束日期','文件','可用状态'])
+                for file in eligible:
+                    writer.writerow([record['id'],record['status'],file['city'],file['dataset'],*artifact_scope(file),file['name'],'可用' if file.get('available',True) else file.get('unavailable_reason','不可用')])
+                writer.writerow(['未完成资料项',record['failed_items']])
+                for item in record.get('incomplete_items', []):
+                    writer.writerow([record['id'],item['status'],item['city'],item['dataset'],*artifact_scope(item),'未生成文件','未完成'])
+                archive.writestr('文件清单.csv' if record.get('result_layout') == 3 else '任务清单.csv', table.getvalue().encode('utf-8-sig'))
             used = set()
             for file in entries:
                 run_owner = manager.run_owner(file['run_id']) if owner is None else owner
@@ -146,9 +166,10 @@ def record_bundle(manager, owner, record_id, city=None, purpose='results'):
                 with manager._lock, manager._connection() as connection:
                     _, run = manager._find(connection, run_owner, file['run_id'])
                     expected = next(item for item in run['files'] if item['id'] == file['id'])
-                relative = f"{archive_component(file['city'])}/{name}"
+                prefix = ('来源/' if purpose == 'sources' else '结果/') if record.get('result_layout') == 2 else ''
+                relative = name if record.get('result_layout') == 3 else f"{prefix}{archive_component(file['city'])}/{name}"
                 if relative.casefold() in used:
-                    relative = f"{archive_component(file['city'])}/{file['run_id'][:8]}_{file['id'][:8]}_{name}"
+                    relative = f"{file['run_id'][:8]}_{file['id'][:8]}_{name}" if record.get('result_layout') == 3 else f"{prefix}{archive_component(file['city'])}/{file['run_id'][:8]}_{file['id'][:8]}_{name}"
                 if relative.casefold() in used:
                     raise DownloadArchiveError('文件名重复，已停止打包')
                 used.add(relative.casefold())
@@ -159,6 +180,58 @@ def record_bundle(manager, owner, record_id, city=None, purpose='results'):
                 if size != expected['bytes'] or digest.hexdigest() != expected['sha256']:
                     raise DownloadNotFound('文件在打包期间发生变化，请重新检查下载记录')
         return target, f"下载记录_{record['id'][:8].upper()}.zip"
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+
+
+def review_bundle(manager,owner,record_id,city=None):
+    """Business source files only, with provenance; excludes diagnostics and generated copies."""
+    import csv
+    import io
+    from download_archive import archive_component
+    from download_jobs import DownloadNotFound, DownloadSummaryPending
+    record=get_record(manager,owner,record_id)
+    if record['status'] in ACTIVE:
+        raise DownloadSummaryPending('任务结束后领取复核资料')
+    base=manager.db_path.parent/'bundles';base.mkdir(parents=True,exist_ok=True)
+    handle,name=tempfile.mkstemp(suffix='.zip',dir=base);os.close(handle);target=Path(name)
+    try:
+        count=0;used={};table=io.StringIO(newline='');writer=csv.writer(table)
+        writer.writerow(['来源任务','来源相对位置','领取文件','字节数','SHA256','说明'])
+        with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED,allowZip64=True) as archive:
+            for run_id in record['member_ids']:
+                run_owner=manager.run_owner(run_id) if owner is None else owner
+                folder=manager._run_directory(run_owner,run_id)
+                raw=folder/'原始资料'
+                if not raw.is_dir():continue
+                for source in sorted(raw.rglob('*')):
+                    if source.is_symlink() or not source.resolve().is_relative_to(raw.resolve()):
+                        raise ValueError('复核来源路径无效')
+                    relative=source.relative_to(raw)
+                    if not source.is_file() or source.name.startswith('.') or any(part in ('generated','inputs') for part in relative.parts) or source.suffix.lower() not in ('.xlsx','.xls','.csv','.zip'):
+                        continue
+                    if city and relative.parts[0] not in (city,'支付绑定公共来源','蓝橙','商翼'):
+                        continue
+                    from delivery_store import digest
+                    checksum=digest(source)
+                    # Identical source bytes are exported once; every original
+                    # location is still represented in the provenance table.
+                    if checksum not in used:
+                        context='_'.join(relative.parts[:-1])
+                        context=context.replace('payment_binding','支付绑定').replace('rider_detail','骑手明细').replace('receive_account','收薪账户').replace('rider_info','骑手信息')
+                        export=archive_component((context+'_'+source.stem)[:65])+'_'+checksum[:8]+source.suffix.lower()
+                        actual=hashlib.sha256()
+                        with source.open('rb') as original,archive.open(export,'w',force_zip64=True) as output:
+                            while chunk:=original.read(1024*1024):
+                                output.write(chunk);actual.update(chunk)
+                        if actual.hexdigest()!=checksum:raise ValueError('复核来源在打包期间变化')
+                        used[checksum]=export;count+=1
+                    writer.writerow([run_id,str(relative),used[checksum],source.stat().st_size,checksum,'平台来源原件；实际采用范围及筛选规则请核对任务记录'])
+            if not count:
+                raise DownloadNotFound('本任务暂无可领取的来源原件')
+            archive.writestr('来源清单.csv',table.getvalue().encode('utf-8-sig'))
+        return target,'复核资料_'+record['id'][:8].upper()+'.zip'
     except BaseException:
         target.unlink(missing_ok=True)
         raise

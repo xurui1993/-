@@ -267,7 +267,7 @@ export function getWorkbenchBreadcrumb(
     return {
       section: '任务与归档',
       title: '任务与产出中心',
-      subtitle: '按四大系统筛选历史任务、巡检分项进度并打包领取产出文件',
+      subtitle: '统一查看任务、下载结果和整理历史记录',
     };
   }
   if (taskKind === 'generate') {
@@ -390,7 +390,7 @@ export function getHeaderModuleContext(
     return {
       groupLabel: '归档与配置',
       title: '任务中心',
-      subtitle: '按四大平台筛选历史任务、巡检分项进度并打包领取产出文件',
+      subtitle: '统一查看任务、下载结果和整理历史记录',
       iconKey: 'folder-check',
     };
   }

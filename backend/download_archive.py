@@ -64,7 +64,7 @@ def beijing_time(value=None):
     return value.astimezone(BEIJING)
 
 
-def archive_relative_dir(run_id, created_at, cities):
+def archive_relative_dir(run_id, created_at, cities, label=None):
     if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
         raise ValueError("归档任务标识无效")
     if (not isinstance(cities, list) or not cities or len(set(cities)) != len(cities)):
@@ -73,8 +73,53 @@ def archive_relative_dir(run_id, created_at, cities):
         archive_component(city)
     created = beijing_time(created_at)
     city_label = cities[0] if len(cities) == 1 else f"{len(cities)}个城市"
-    folder = f"{created:%Y%m%d_%H%M%S}_{city_label}_{run_id[:6].upper()}"
+    if label is not None:
+        archive_component(label)
+    folder = f"{created:%Y%m%d_%H%M%S}_{label + '_' if label else ''}{city_label}_{run_id[:6].upper()}"
     return f"{created:%Y-%m}/{folder}"
+
+
+def task_archive_label(datasets):
+    def dataset_group(key):
+        if key == 'baize_employees': return 'baize'
+        if key in ('rider_daily','detail_orders','detail_kesu','detail_reviews','rider_archive'): return 'xiaoxiang'
+        return 'lanorange' if key.startswith('lanorange_') or key == 'abnormal_riders' else 'fengshen'
+    platforms = {'fengshen':'风神', 'lanorange':'蓝橙', 'baize':'商翼', 'xiaoxiang':'灯塔'}
+    groups = list(dict.fromkeys(platforms[dataset_group(key)] for key in datasets))
+    names = [LABELS.get(key, key).replace('蓝橙', '').replace('风神', '') for key in datasets[:2]]
+    return archive_component(('_'.join(groups) + '_' + '、'.join(names) + ('等' if len(datasets)>2 else ''))[:65])
+
+
+def write_task_checklist(directory, run):
+    """Human-readable receipt; metadata only, no workbook contents."""
+    import csv
+    import tempfile
+    root = Path(directory)
+    handle, temporary = tempfile.mkstemp(prefix='.checklist_', suffix='.tmp', dir=root)
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8-sig', newline='') as stream:
+            writer = csv.writer(stream)
+            writer.writerow(['任务编号','生成时间','城市','资料','实际范围开始','实际范围结束','状态','文件','字节数','SHA256'])
+            for item in run.get('items', []):
+                files = [file for file in run.get('files', []) if all(file.get(key)==item.get(key) for key in ('city','dataset','start','end'))]
+                for file in files or [{}]:
+                    writer.writerow([run['id'],_display_time(run['created_at']),item['city'],LABELS.get(item['dataset'],item['dataset']),*artifact_scope(item),STATUSES.get(item['status'],item['status']),file.get('relative_path',''),file.get('bytes',''),file.get('sha256','')])
+            for file in run.get('files', []):
+                if file.get('artifact_role') == 'summary':
+                    writer.writerow([run['id'],_display_time(run['created_at']),file['city'],LABELS.get(file['dataset'],file['dataset']),file.get('start',''),file.get('end',''),'已生成汇总',file.get('relative_path',''),file.get('bytes',''),file.get('sha256','')])
+        os.replace(temporary, root / '任务清单.csv')
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def artifact_scope(item):
+    key = item.get('dataset', '')
+    if key in LANORANGE_DATASETS or key in ('lanorange_summary','abnormal_riders','baize_employees','invitation_records'):
+        return '全量', ''
+    if key in ('rider_info','goods_rent','rider_archive'):
+        return '当前快照', ''
+    return item.get('start',''), item.get('end','')
 
 
 def _generation_mmdd(stamp=None):
@@ -249,7 +294,7 @@ def write_download_summary(run_dir, run):
         digest = entry.get("sha256")
         if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
             lines.append(f"  SHA-256：{digest}")
-    lines.extend(["",                   "归档规则：所有城市成品统一存放在任务目录，文件名标注城市；原始资料及诊断存放在原始资料/城市目录。",
+    lines.extend(["", ("归档规则：结果/城市目录存放成品，来源目录存放关联资料；原始资料目录保留平台原件及诊断。" if run.get('result_layout') == 2 else "归档规则：所有城市成品统一存放在任务目录，文件名标注城市；原始资料及诊断存放在原始资料/城市目录。"),
                   "月度资料按覆盖的每个月分别下载整月；骑手信息为下载时的当前快照。",
                   "生成工作簿名称含城市、业务周期、资料名称和生成日期 MMDD；任务目录名另含发布时间与任务编号，不同任务互不覆盖。",
                   "浏览器另存文件的目录由访问者设备决定。", "本下载任务不执行薪资核算。", ""])

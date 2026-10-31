@@ -18,7 +18,6 @@ import { SystemConnections } from "./components/SystemConnections";
 import { HeaderDownloadCenter } from "./components/HeaderDownloadCenter";
 import { LanorangeApprovals } from "./components/LanorangeApprovals";
 import { LanorangePriceExports } from "./components/LanorangePriceExports";
-import { PriceTaskRecords } from './components/PriceTaskRecords';
 import { DeductionSettings } from "./components/DeductionSettings";
 import { SystemTemplatesPanel } from "./components/SystemTemplatesPanel";
 import { initialTaskKind, TASK_KIND_LABELS, type TaskKind } from "./lib/taskCatalog";
@@ -1259,7 +1258,6 @@ export default function App() {
               </section>
             )}
 
-            {workspaceView==='history'&&historyAll&&<PriceTaskRecords apiFetch={fetchWithAuth} onOpen={navigateWorkspace}/>}
             {workspaceView==='approval' && <LanorangeApprovals apiFetch={fetchWithAuth} workspaceId={workspaceId} onActiveCount={setApprovalActiveCount} onSwitchView={navigateWorkspace}/>}
             {workspaceView==='price-export' && <LanorangePriceExports apiFetch={fetchWithAuth} workspaceId={workspaceId} onActiveCount={setPriceExportActiveCount} onSwitchView={navigateWorkspace}/>}
             <section hidden={workspaceView==='approval' || workspaceView==='price-export' || (workspaceView !== 'history' && taskKind === 'payroll')} aria-label="任务下载">
@@ -1278,6 +1276,7 @@ export default function App() {
                 onOpenPayroll={id => void openPayrollBatch(id)}
                 onNavigateGenerate={handleNavigateGenerate}
                 onNavigatePayroll={handleNavigatePayroll}
+                onOpenPrice={navigateWorkspace}
                 prefill={downloadPrefill}
                 onActiveCountChange={setActiveDownloadCount}
                 onOpenFengshenLogin={() => setFengshenLoginRequest(value => value + 1)}

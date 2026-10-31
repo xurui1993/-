@@ -86,6 +86,8 @@ app.include_router(lanorange_approvals_router)
 app.include_router(lanorange_prices_router)
 app.include_router(payroll_inputs_router)
 app.include_router(workbench_router)
+from task_center import router as task_center_router
+app.include_router(task_center_router)
 
 
 class ConfigRequest(BaseModel):

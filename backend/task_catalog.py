@@ -1,5 +1,19 @@
 """Business task intent; execution remains in the existing collectors/engines."""
-GENERATORS = ('payment_binding', 'abnormal_followup', 'abnormal_riders')
+# Presentation and scope contract for the report builder. Adding a report also
+# requires its dataset/collector implementation; the page itself stays generic.
+REPORTS = (
+    {'id':'payment_binding', 'label':'骑手支付绑定', 'scope':'city_month',
+     'systems':['风神','蓝橙','商翼'], 'station_rule':'separation',
+     'description':'按城市和月份整理骑手支付绑定信息。',
+     '_source_labels':['风神骑手数据明细','风神骑手绑定','风神骑手信息','蓝橙代领资料','商翼员工资料']},
+    {'id':'abnormal_followup', 'label':'异常骑手跟进', 'scope':'city_month',
+     'systems':['风神','蓝橙','商翼'], 'station_rule':'separation',
+     'description':'以支付绑定为基准生成异常骑手跟进表。', '_source_group':'FOLLOWUP_DEPENDENCIES'},
+    {'id':'abnormal_riders', 'label':'异常骑手整理', 'scope':'all',
+     'systems':['蓝橙'], 'station_rule':'none',
+     'description':'整理蓝橙全量异常骑手资料。', '_source_group':'ABNORMAL_RIDERS_DEPENDENCIES'},
+)
+GENERATORS = tuple(report['id'] for report in REPORTS)
 TASK_LABELS = {'download': '资料下载', 'generate': '业务表生成', 'payroll': '兼职薪资核算'}
 
 
@@ -31,15 +45,7 @@ def category(run):
 
 
 def generators():
-    from download_service import DATASETS, FOLLOWUP_DEPENDENCIES, ABNORMAL_RIDERS_DEPENDENCIES
-    return [
-        {'id': 'payment_binding', 'label': '骑手支付绑定', 'scope': 'city_month',
-         'description': '按城市、月份生成支付绑定表，资料准备完整后再生成。',
-         'sources': ['风神骑手数据明细', '风神骑手绑定', '风神骑手信息', '蓝橙代领资料', '白泽员工资料']},
-        {'id': 'abnormal_followup', 'label': '异常骑手跟进', 'scope': 'city_month',
-         'description': '以骑手支付绑定为基准，按城市、月份生成跟进表。',
-         'sources': [DATASETS[value] for value in FOLLOWUP_DEPENDENCIES]},
-        {'id': 'abnormal_riders', 'label': '异常骑手整理', 'scope': 'all',
-         'description': '按全部城市整理蓝橙全量资料，生成一份异常骑手工作簿。',
-         'sources': [DATASETS[value] for value in ABNORMAL_RIDERS_DEPENDENCIES]},
-    ]
+    import download_service as service
+    return [{**{key:value for key,value in report.items() if not key.startswith('_')},
+             'sources': report.get('_source_labels') or [service.DATASETS[key] for key in getattr(service,report['_source_group'])]}
+            for report in REPORTS]

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 let openDrawers = 0;
@@ -28,10 +29,13 @@ export function WorkbenchDrawer({ title, onClose, children, wide = false, bodyCl
     document.addEventListener('keydown', key);
     return () => { document.removeEventListener('keydown', key); if(current){const index=drawerStack.indexOf(current);if(index>=0)drawerStack.splice(index,1);} if (--openDrawers === 0) document.body.style.overflow = originalOverflow; previous?.focus(); };
   }, []);
-  return <div className="wb-overlay" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+  const overlay = <div className="wb-overlay" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <div ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} className={`wb-drawer ${wide ? 'wb-drawer-wide' : ''}`}>
       <header className="wb-drawer-header"><h2>{title}</h2><button className="wb-icon" aria-label={closeLabel || `关闭${title}`} onClick={onClose}><X size={20} /></button></header>
       <div className={`wb-drawer-body ${bodyClassName}`}>{children}</div>
     </div>
   </div>;
+  // Leave page-local stacking contexts so the header cannot cover Close.
+  // Keep the portal within the themed app root to preserve typography/colors.
+  return typeof document === 'undefined' ? overlay : createPortal(overlay, document.querySelector('.workbench-app') || document.body);
 }

@@ -194,6 +194,9 @@ class PriceExports:
                 if stop():self.update(key,status='cancelled',finished=time.time(),message='已停止，未发布不完整导出文件');partial.unlink(missing_ok=True);return
                 result=directory/'result.xlsx';os.replace(partial,result)
                 failed=sum(r['result']=='失败' for r in receipts);self.update(key,status='partial' if failed else 'completed',finished=time.time(),message=f'导出完成，{failed}个站点失败' if failed else '导出完成；0价格和空值均保留',sha256=file_hash(result),bytes=result.stat().st_size)
+                if self.root.resolve()==ROOT.resolve():
+                    try:self.result(row['scope'],key)
+                    except Exception:self.update(key,message='结果已生成，目录发布未完成；领取时可重试，原资料保留')
         except Exception as error:
             self.update(key,status='failed',finished=time.time(),message=str(error) if isinstance(error,ApprovalError) else '导出未完成，请检查连接或模板；原资料未修改');partial.unlink(missing_ok=True)
         finally:
@@ -208,7 +211,18 @@ class PriceExports:
         return [self.get(scope,k) for k in keys]
     def result(self,scope,key):
         value=self.get(scope,key);path=(self.root/key/'result.xlsx').resolve()
-        if not path.is_relative_to(self.root.resolve()) or value['status'] not in ('completed','partial') or not path.is_file() or path.stat().st_size!=value['bytes'] or file_hash(path)!=value['sha256']:raise ApprovalError('导出文件尚未就绪或校验不通过','changed')
+        if not path.is_relative_to(self.root.resolve()):raise ApprovalError('导出路径无效','changed')
+        if self.root.resolve() == ROOT.resolve():
+            from delivery_store import project_store
+            import datetime as dt
+            store=project_store();published=store.location('price-export:'+key,'result')
+            if published is None and not path.is_file():path=store.relocated(path) or path
+            if published is None and path.is_file() and value['status'] in ('completed','partial'):
+                store.publish('price-export:'+key,dt.datetime.fromtimestamp(value['created'],dt.timezone.utc),'蓝橙_每日价格',
+                    [dict(run_id='price-export:'+key,id='result',path=str(path),name='蓝橙_每日价格.xlsx',dataset='每日价格',bytes=value['bytes'],sha256=value['sha256'])])
+                published=store.location('price-export:'+key,'result')
+            if published is not None:path=published
+        if value['status'] not in ('completed','partial') or not path.is_file() or path.stat().st_size!=value['bytes'] or file_hash(path)!=value['sha256']:raise ApprovalError('导出文件尚未就绪或校验不通过','changed')
         return path
 
 
@@ -235,7 +249,7 @@ def history(request:Request):
     scope=owner(request);return {'exports':call(lambda:manager().history(scope))}
 @router.get('/exports/{key}/result.xlsx')
 def result(key:str,request:Request):
-    scope=owner(request);path=call(lambda:manager().result(scope,key));return FileResponse(path,filename='蓝橙待审每日价格.xlsx',media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Cache-Control':'no-store'})
+    scope=owner(request);path=call(lambda:manager().result(scope,key));return FileResponse(path,filename=path.name,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Cache-Control':'no-store'})
 @router.post('/exports/{key}/stop')
 def stop(key:str,payload:dict,request:Request):
     scope=owner(request);call(lambda:manager().get(scope,key))

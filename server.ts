@@ -8,6 +8,7 @@ import { createFengshenAuthProxy } from "./server/fengshenAuthProxy.ts";
 import { createDownloadProxy } from "./server/downloadProxy.ts";
 import { acquireStartupLock, assertPortAvailable } from "./server/startupGuard.ts";
 import { createLegacyBoundary } from "./server/legacyDownloadBoundary.ts";
+import { deliveryDownloadAlias } from './server/deliveryDownloadAlias.ts';
 import http from "node:http";
 import fs from "fs";
 import os from "os";
@@ -150,6 +151,7 @@ async function startServer() {
   }
   const proxySecret = randomBytes(32).toString("hex");
   const legacyBoundary = createLegacyBoundary();
+  app.use(deliveryDownloadAlias(process.env.FENGSHEN_DOWNLOAD_ROOT || path.resolve('outputs/fengshen_downloads')));
   app.use(legacyBoundary.guardRequest);
   const legacyJson = () => [express.json(), legacyBoundary.guardBody];
   ensureConfigExists();

@@ -27,6 +27,12 @@ class IntentTests(unittest.TestCase):
         self.assertEqual(values['payment_binding']['scope'], 'city_month')
         self.assertEqual(len(values['abnormal_riders']['sources']), 5)
         self.assertIn('骑手支付绑定（生成表）', values['abnormal_followup']['sources'])
+        for value in values.values():
+            self.assertTrue(value['label'])
+            self.assertTrue(value['systems'])
+            self.assertIn(value['scope'], ('city_month','city_range','all'))
+            self.assertIn(value['station_rule'], ('separation','none'))
+            self.assertFalse(any(key.startswith('_') for key in value))
 
     def test_raw_and_generation_requests_cannot_mix_business_intent(self):
         self.assertEqual(catalog.intent({'datasets': ['payment_binding']}), {})
@@ -107,6 +113,9 @@ class DurableIntentTests(unittest.TestCase):
                 files = []
                 for item in jobs._initial_items(config):
                     file = make_file(directory, {**config, 'cities': [item['city']]}, item['dataset'], item['dataset']+'.csv', item['start'], item['end'])
+                    if item['dataset']!='abnormal_riders':
+                        raw=directory/'原始资料/全部城市'/item['dataset'];raw.mkdir(parents=True)
+                        (raw/(item['dataset']+'.csv')).write_text(item['dataset'],encoding='utf-8')
                     update_item({**file, 'status': 'success'}); files.append(file)
                 return files
             manager = jobs.DownloadManager(root/'db/tasks.sqlite3', root/'outputs', execute)
@@ -126,8 +135,12 @@ class DurableIntentTests(unittest.TestCase):
                 for purpose, count in [('results', 1), ('sources', 5)]:
                     path, _ = download_records.record_bundle(manager, 'tester', created['id'], purpose=purpose)
                     with zipfile.ZipFile(path) as archive:
-                        receipt = json.loads(archive.read('下载说明.json'))
-                        self.assertEqual(len(receipt['files']), count)
+                        names=archive.namelist()
+                        checklist='文件清单.csv' if purpose=='results' else '来源清单.csv'
+                        self.assertIn(checklist,names)
+                        self.assertEqual(len([name for name in names if name!=checklist]),count)
+                        self.assertFalse(any('/' in name or name.endswith('.json') for name in names))
+                    path.unlink()
                 legacy = {'cities': ['泉州'], 'datasets': ['delivery_fee'], 'start': '2026-10-01', 'end': '2026-10-15', 'months': ['2026-10']}
                 self.assertNotIn('task_kind', service.validate_request({**legacy, 'cities':['全部城市'], 'datasets':['abnormal_riders']}))
             finally: manager.shutdown()

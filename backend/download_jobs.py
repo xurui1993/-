@@ -21,7 +21,7 @@ from types import SimpleNamespace
 import zipfile
 
 from collection_errors import CollectionFailure
-from download_archive import ARCHIVE_VERSION, archive_component, archive_relative_dir, write_download_summary
+from download_archive import ARCHIVE_VERSION, archive_component, archive_relative_dir, write_download_summary, task_archive_label, write_task_checklist
 from download_single_instance import InstanceLock
 
 
@@ -234,9 +234,13 @@ def _default_executor(config, run_dir, log, cancelled, update_item):
 
 
 class DownloadManager:
-    def __init__(self, db_path, output_root, executor_fn=None):
+    def __init__(self, db_path, output_root, executor_fn=None, flat_delivery=True):
         self.db_path = Path(db_path)
         self.output_root = Path(output_root).resolve()
+        self.flat_delivery = flat_delivery
+        self.workspace_root = self.db_path.parent.resolve() / 'workspaces' / 'downloads'
+        from delivery_store import DeliveryStore
+        self.deliveries = DeliveryStore(self.db_path.parent / 'deliveries.sqlite3',self.output_root)
         self.executor_fn = executor_fn or _default_executor
         self._lock = threading.RLock()
         self._queue = queue.Queue()
@@ -391,11 +395,13 @@ class DownloadManager:
                     "SELECT state_json FROM download_runs WHERE created_at = ?", (created_at,)).fetchall()]
                 for _ in range(32):
                     run_id = uuid.uuid4().hex
-                    relative = archive_relative_dir(run_id, created_at, config["cities"])
-                    target = self.output_root / relative
+                    label = task_archive_label(config['datasets'])
+                    relative = archive_relative_dir(run_id, created_at, config["cities"], label)
+                    archive_root = self.workspace_root if self.flat_delivery else self.output_root
+                    target = archive_root / relative
                     registered_collision = any(
                         state.get("archive_version") == ARCHIVE_VERSION
-                        and Path(state.get("_archive_root", "")).resolve() == self.output_root
+                        and Path(state.get("_archive_root", "")).resolve() == archive_root
                         and Path(state.get("archive_relative_dir", "")) == Path(relative)
                         for state in registered)
                     if (not registered_collision and not target.exists() and not target.is_symlink()
@@ -412,8 +418,9 @@ class DownloadManager:
                        "datasets": config["datasets"], "progress": 0, "summary": {}, "error": "",
                        "logs": [], "items": _initial_items(config), "files": [],
                        "phase": "queued", "phase_since": created_at, "last_activity_at": created_at,
-                       "_archive_root": str(self.output_root), "archive_version": ARCHIVE_VERSION,
-                       "archive_relative_dir": relative, "archive_code": run_id[:6].upper()}
+                       "_archive_root": str(archive_root), "archive_version": ARCHIVE_VERSION,
+                       "archive_relative_dir": relative, "archive_code": run_id[:6].upper(),
+                       "archive_label": label, "result_layout": 3 if self.flat_delivery else 2}
                 if recovery_of is not None:
                     run["recovery_of"] = recovery_of
                 if retry_of is not None:
@@ -706,6 +713,12 @@ class DownloadManager:
 
     def _public_run(self, connection, run):
         result = _public(run)
+        for file in result['files']:
+            try:
+                published=self.deliveries.location(run['id'],file['id'])
+                if published is not None:file['name']=published.name
+            except (OSError,ValueError):
+                pass
         if run.get("status") == "queued":
             active_ids = [row["id"] for row in connection.execute(
                 "SELECT id FROM download_runs WHERE status IN (?,?,?,?) ORDER BY created_at,rowid", tuple(sorted(ACTIVE_STATUSES))).fetchall()
@@ -739,7 +752,7 @@ class DownloadManager:
             if (relative.is_absolute() or relative.drive or not relative.parts
                     or any(part in (".", "..") for part in relative.parts)):
                 raise DownloadNotFound("归档目录无效")
-            expected = archive_relative_dir(run["id"], run["created_at"], run["cities"])
+            expected = archive_relative_dir(run["id"], run["created_at"], run["cities"], run.get('archive_label'))
             if relative != Path(expected):
                 raise DownloadNotFound("归档目录无效")
             candidate = root / relative
@@ -896,8 +909,9 @@ class DownloadManager:
                     raw = next(entry for entry in run['files'] if entry['id'] == file['id'])
                     try:
                         directory = self._archive_directory(run)
-                        path = (directory / raw['relative_path']).resolve()
-                        exists = path.is_relative_to(directory) and path.is_file()
+                        path = self._artifact_path(run, raw)
+                        exists = path.is_file()
+                        file['name'] = path.name
                         available = exists and path.stat().st_size == raw['bytes']
                         reason = '' if available else '文件已变更' if exists else '文件已不存在'
                     except (OSError, ValueError, DownloadNotFound, DownloadRootError, DownloadArchiveError):
@@ -1039,6 +1053,8 @@ class DownloadManager:
             try:
                 directory = self._archive_directory(run, create=True)
                 summary = Path(write_download_summary(directory, _without_private(json.loads(json.dumps(run))))).resolve()
+                if run.get('result_layout') == 2:
+                    write_task_checklist(directory, run)
                 if summary.parent != directory or summary.name != "下载说明.txt" or not summary.is_file():
                     raise ValueError()
                 return summary, "下载说明.txt"
@@ -1052,6 +1068,45 @@ class DownloadManager:
             self.get_summary(owner, run_id)
         except Exception:
             pass
+        if self.flat_delivery:
+            try:
+                self.publish_delivery(owner,run_id)
+            except DownloadSummaryPending:
+                pass
+            except Exception:
+                # Keep successful business work and its sources; surface delivery
+                # failure without losing a result or silently reporting it ready.
+                self._mutate(owner,run_id,lambda run: _add_log(run,'结果目录发布未完成；原资料已保留，可重新打开任务目录重试'))
+
+    def _artifact_path(self, run, entry):
+        published = self.deliveries.location(run['id'],entry['id'])
+        if published is not None:
+            return published
+        directory = self._archive_directory(run)
+        candidate = (directory / entry['relative_path']).resolve()
+        if not candidate.is_relative_to(directory):
+            raise DownloadNotFound('文件路径无效')
+        return candidate if candidate.is_file() else self.deliveries.relocated(candidate) or candidate
+
+    def publish_delivery(self, owner, run_id):
+        from download_records import get_record
+        from task_catalog import GENERATORS
+        with self._lock:
+            record = get_record(self,owner,run_id)
+            if record['status'] not in FINAL_STATUSES:
+                raise DownloadSummaryPending('任务结束后发布结果')
+            selected = [f for f in record['files'] if f.get('available',True) and
+                        (record['kind'] != 'generate' or f['dataset'] in GENERATORS)]
+            if not selected:
+                raise DownloadNotFound('暂无可发布结果')
+            entries=[]
+            for file in selected:
+                file_owner=self.run_owner(file['run_id']) if owner is None else owner
+                path,name=self.get_file(file_owner,file['run_id'],file['id'])
+                entries.append({**file,'path':str(path),'name':name})
+            period=record['start'][:7] if record['start'][:7] == record['end'][:7] else record['start'][:7]+'至'+record['end'][:7]
+            label=(period+'_'+task_archive_label(record['datasets']))[:65]
+            return self.deliveries.publish(record['id'],record['created_at'],label,entries,record.get('incomplete_items',[]))
 
     def _mutate(self, owner, run_id, update):
         with self._lock, self._connection() as connection:
@@ -1205,8 +1260,16 @@ class DownloadManager:
         run_dir = self._archive_directory(run)
         path = (run_dir / relative).resolve()
         if (relative.is_absolute() or relative.drive or ".." in relative.parts
-                or not path.is_relative_to(run_dir) or not path.is_file()):
+                or not path.is_relative_to(run_dir)):
             raise ValueError("下载文件归属无效")
+        restored_id=None
+        if not path.is_file() and run.get('result_layout')==3:
+            published=self.deliveries.location(run['id'],info.get('id',''))
+            path=published or self.deliveries.relocated(path) or path
+            with self.deliveries.db() as db:
+                identity=db.execute('SELECT file_id FROM artifacts WHERE run_id=? AND path=?',(run['id'],str(path))).fetchone()
+                if identity:restored_id=identity['file_id']
+        if not path.is_file():raise ValueError('下载文件不存在')
         is_summary = info.get('artifact_role') == 'summary'
         summary_scope = (is_summary and info.get('city') == '多城市汇总' and info.get('dataset') == 'payment_binding'
                          and 'payment_binding' in config['datasets'] and len(config['cities']) > 1
@@ -1238,7 +1301,28 @@ class DownloadManager:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         if info.get("sha256") is not None and info["sha256"] != digest:
             raise ValueError("下载文件完整性无效")
-        return {"id": uuid.uuid4().hex, "name": name, "relative_path": str(relative), "sha256": digest,
+        if run.get('result_layout') == 2:
+            from task_catalog import GENERATORS
+            category = '来源' if config.get('task_kind') == 'generate' and info['dataset'] not in GENERATORS else '结果'
+            destination = run_dir / category / archive_component(info['city']) / name
+            if path != destination:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.is_symlink():
+                    raise DownloadArchiveError('同名结果已存在，未覆盖原文件')
+                # Publication is the final registration step, after generators have
+                # consumed their intermediate paths. Preserve intermediates for recovery.
+                import shutil
+                copied = not destination.exists()
+                if copied:
+                    shutil.copy2(path, destination)
+                with destination.open('rb') as stream:
+                    if hashlib.file_digest(stream, 'sha256').hexdigest() != digest:
+                        if copied:
+                            destination.unlink(missing_ok=True)
+                        raise DownloadArchiveError('结果文件复制校验失败')
+                path = destination
+                relative = path.relative_to(run_dir)
+        return {"id": restored_id or uuid.uuid4().hex, "name": name, "relative_path": str(relative), "sha256": digest,
                 "city": info["city"], "dataset": info["dataset"], "start": info.get("start", ""),
                 "end": info.get("end", ""), "bytes": path.stat().st_size,
                 **({'delivery_kind': info['delivery_kind']} if info.get('delivery_kind') in ('platform_original','system_merged') else {}),
@@ -1250,9 +1334,8 @@ class DownloadManager:
             entry = next((item for item in run["files"] if item["id"] == file_id), None)
             if entry is None:
                 raise DownloadNotFound("下载文件不存在")
-            run_dir = self._archive_directory(run)
-            path = (run_dir / entry["relative_path"]).resolve()
-            if not path.is_relative_to(run_dir) or not path.is_file():
+            path = self._artifact_path(run,entry)
+            if not path.is_file():
                 raise DownloadNotFound("下载文件不存在")
             if path.stat().st_size != entry["bytes"]:
                 raise DownloadNotFound("下载文件已变更")
@@ -1260,7 +1343,7 @@ class DownloadManager:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
             if digest != entry.get("sha256"):
                 raise DownloadNotFound("下载文件已变更")
-            return path, entry["name"]
+            return path, path.name
 
     def get_raw_bundle(self, owner, run_id):
         with self._lock,self._connection() as connection:
@@ -1288,6 +1371,12 @@ class DownloadManager:
             target.unlink(missing_ok=True);raise
 
     def get_bundle(self, owner, run_id, city=None):
+        with self._lock,self._connection() as connection:
+            _,current=self._find(connection,owner,run_id)
+            flat=current.get('result_layout')==3
+        if flat:
+            from download_records import record_bundle
+            return record_bundle(self,owner,run_id,city)
         with self._lock, self._connection() as connection:
             _, run = self._find(connection, owner, run_id)
             from lanorange_catalog import ALL_CITIES, DATASETS as blue
@@ -1313,10 +1402,9 @@ class DownloadManager:
                     used = {"下载说明.txt"}
                     for entry in entries:
                         relative = Path(entry["relative_path"])
-                        source = (directory / relative).resolve()
-                        name = entry["name"]
+                        source,name = self.get_file(owner,run_id,entry['id'])
                         if (relative.is_absolute() or relative.drive or ".." in relative.parts
-                                or not source.is_relative_to(directory) or not source.is_file()
+                                or not source.is_file()
                                 or not isinstance(name, str) or Path(name).name != name
                                 or any(char in name for char in '/\\:\r\n\x00')):
                             raise DownloadNotFound("成品文件归属发生变化，已停止打包")
@@ -1407,7 +1495,7 @@ class DownloadManager:
             if selected.intersection(GENERATOR_DEPENDENCIES) and not selected.issubset(set(LANORANGE_DATASETS) | {'abnormal_riders'}):
                 from download_pipeline import reserve_local_work
                 reserve_local_work()
-            result = self.executor_fn({**config, "owner": owner, "archive_created_at": run["created_at"]},
+            result = self.executor_fn({**config, "owner": owner, "archive_created_at": run["created_at"], 'result_layout': run.get('result_layout', 1)},
                                       run_dir, log, cancelled, update_item)
             if not isinstance(result, list):
                 raise ValueError("下载文件清单无效")

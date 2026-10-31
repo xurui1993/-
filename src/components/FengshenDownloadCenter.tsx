@@ -10,12 +10,13 @@ import { itemKey, phaseLabel, recoverable, retainAttempt, selectionKey, isLanora
 import type { CreateSelection, DownloadUser, ItemSelection, Recovery, RequestAttempt } from '../lib/downloadCenterLogic';
 import { WorkbenchDrawer } from './WorkbenchDrawer';
 import { DownloadRecords } from './DownloadRecords';
-import { isGenerator, inferTaskKind } from '../lib/taskCatalog';
+import { ReportBuilder } from './ReportBuilder';
+import { reportRange, type ReportDefinition } from '../lib/reportBuilder';
+import { isGenerator, inferTaskKind, registerGeneratorIds } from '../lib/taskCatalog';
 import { DOWNLOAD_PLATFORMS,moduleAcceptsDataset,type DownloadPlatform,type RecordModule } from '../lib/downloadModules';
 import {
   BUILTIN_DOWNLOAD_SCENARIOS,
   computeBillingPeriodRange,
-  GENERATION_REPORT_CARDS,
   getStageHeaderMeta,
   SYSTEM_META,
   type BillingPeriodPreset,
@@ -23,7 +24,7 @@ import {
 } from '../lib/workbench';
 
 interface DownloadOptions {
-  generators?: {id: string; label: string; scope: 'city_month' | 'all'; description: string; sources: string[]}[];
+  generators?: ReportDefinition[];
   cities: { name: string; id: string; disabled?: boolean; note?: string }[];
   cities_source?: 'fengshen' | 'config';
   cities_updated_at?: string;
@@ -113,6 +114,7 @@ interface Props {
   onOpenPayroll?: (id: string) => void;
   onNavigateGenerate?: (cities: string[], start: string, end: string) => void;
   onNavigatePayroll?: (city?: string) => void;
+  onOpenPrice?: (view: 'approval' | 'price-export') => void;
   prefill?: {
     cities?: string[];
     start?: string;
@@ -221,7 +223,7 @@ export function FengshenDownloadCenter(props: Props) {
   return <DownloadAccountPanel apiFetch={props.apiFetch} onAccountChange={props.onAccountChange}>{(user, authenticatedFetch) => <AuthorizedDownloadCenter key={user.id} {...props} apiFetch={authenticatedFetch} user={user} />}</DownloadAccountPanel>;
 }
 
-function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, onActiveCountChange, fengshenAuthStatus, user, embedded, navigation, taskKind = 'download', platform,recordModule,hideNavigation, onTaskKindChange, onViewChange, onFormLock, onOpenPayroll, onNavigateGenerate, onNavigatePayroll, prefill }: Props & { user: DownloadUser }) {
+function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, onActiveCountChange, fengshenAuthStatus, user, embedded, navigation, taskKind = 'download', platform,recordModule,hideNavigation, onTaskKindChange, onViewChange, onFormLock, onOpenPayroll, onNavigateGenerate, onNavigatePayroll, onOpenPrice, prefill }: Props & { user: DownloadUser }) {
   const apiRef = useRef(apiFetch);
   apiRef.current = apiFetch;
   const [options, setOptions] = useState<DownloadOptions | null>(null);
@@ -235,10 +237,11 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const previousKind = useRef(selectionScope);
   const moduleDataset=(id:string)=>taskKind==='generate'?isGenerator(id):!isGenerator(id)&&(!platform||moduleAcceptsDataset(id,platform));
   const visibleDatasets=options?.datasets.filter(value=>moduleDataset(value.id))||[];
-  const [start, setStart] = useState(() => `${shanghaiToday().slice(0, 7)}-01`);
-  const [end, setEnd] = useState(shanghaiToday);
+  const [start, setStart] = useState(() => taskKind === 'generate' ? computeBillingPeriodRange('last_full_month', shanghaiToday()).start : `${shanghaiToday().slice(0, 7)}-01`);
+  const [end, setEnd] = useState(() => taskKind === 'generate' ? computeBillingPeriodRange('last_full_month', shanghaiToday()).end : shanghaiToday());
   const [refreshHistory, setRefreshHistory] = useState(false);
   const [includeSeparation, setIncludeSeparation] = useState(false);
+  const scopeSelections = useRef<Record<string, {cities:string[];start:string;end:string;includeSeparation:boolean}>>({});
   const [runs, setRuns] = useState<DownloadRun[]>([]);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
   const [citySearch, setCitySearch] = useState('');
@@ -247,6 +250,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
 
   useEffect(() => {
     if (!prefill || !prefill.token) return;
+    const target = prefill.taskKind === 'generate' ? 'generate' : selectionScope;
+    scopeSelections.current[target] = {cities:prefill.cities || cities, start:prefill.start || start, end:prefill.end || end, includeSeparation};
     if (prefill.cities && prefill.cities.length) {
       setCities(prefill.cities);
     }
@@ -286,6 +291,19 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   useEffect(() => {
     if (previousKind.current === selectionScope || createAttempt.current) return;
     const previous = previousKind.current; previousKind.current = selectionScope;
+    scopeSelections.current[previous] = {cities:[...cities],start,end,includeSeparation};
+    const savedScope = scopeSelections.current[selectionScope];
+    if (savedScope) {
+      setCities(savedScope.cities); setStart(savedScope.start); setEnd(savedScope.end); setIncludeSeparation(savedScope.includeSeparation);
+    } else if (taskKind === 'generate') {
+      const period = computeBillingPeriodRange('last_full_month', shanghaiToday());
+      setCities([]); setStart(period.start); setEnd(period.end); setIncludeSeparation(false);
+    } else {
+      const yesterday = new Date(shanghaiToday() + 'T00:00:00Z'); yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const lastDay = yesterday.toISOString().slice(0, 10);
+      setCities([]); setStart(platform === 'xiaoxiang' ? lastDay : `${shanghaiToday().slice(0, 7)}-01`);
+      setEnd(platform === 'xiaoxiang' ? lastDay : shanghaiToday()); setIncludeSeparation(false);
+    }
     setDatasets(values => {
       categorySelections.current[previous] = values;
       const saved = categorySelections.current[selectionScope]||[];
@@ -343,6 +361,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
       .then(data => {
         if (controller.signal.aborted) return;
         if (!Array.isArray(data.cities) || !Array.isArray(data.datasets)) throw new Error('下载选项暂不可用，请重试');
+        registerGeneratorIds((data.generators || []).map((report: ReportDefinition) => report.id));
         setOptions(data);
         setCities(previous => previous.filter(city => data.cities.some((item: { name: string; disabled?: boolean }) => item.name === city && !item.disabled)));
         setDatasets(previous => previous.filter(dataset => data.datasets.some((item: { id: string }) => item.id === dataset)));
@@ -437,8 +456,11 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
     : '本地配置';
   const toggle = (value: string, values: string[], setter: (next: string[]) => void) => setter(values.includes(value) ? values.filter(item => item !== value) : [...values, value]);
   const validDates = DATE_PATTERN.test(start) && DATE_PATTERN.test(end) && start <= end;
+  const selectedReport = options?.generators?.find(report => report.id === datasets[0]);
+  const generationRange = reportRange(selectedReport, start, end, shanghaiToday());
+  const generationAll = taskKind === 'generate' && selectedReport?.scope === 'all';
   const baizeOnly = platform === 'baize' || (datasets.length > 0 && datasets.every(isBaize));
-  const xiaoxiangOnly = platform === 'xiaoxiang' || (datasets.length > 0 && datasets.every(isXiaoxiang));
+  const xiaoxiangOnly = taskKind === 'download' && (platform ? platform === 'xiaoxiang' : datasets.length > 0 && datasets.every(isXiaoxiang));
   const archiveOnly = xiaoxiangOnly && datasets.length > 0 && datasets.every(isRiderArchive);
   const xiaoxiangDated = xiaoxiangOnly && !archiveOnly;
   const yesterday = new Date(shanghaiToday() + 'T00:00:00Z'); yesterday.setUTCDate(yesterday.getUTCDate() - 1);
@@ -460,7 +482,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const invalidXiaoxiangMix = datasets.some(isXiaoxiang) && !xiaoxiangOnly;
   const selectableCities = options?.cities.filter(city => !city.disabled) ?? [];
   const invalidMerchantMix=datasets.some(isMerchant)&&!merchantOnly;
-  const canSubmit = datasets.every(moduleDataset) && !invalidBaizeMix && !invalidXiaoxiangMix && !invalidMerchantMix && datasets.length > 0 && (merchantOnly?(cities.length>0&&merchantDateValid):(archiveOnly || blueOnly || (xiaoxiangDated && xiaoxiangDateValid) || (cities.length > 0 && validDates)));
+  const canSubmit = taskKind === 'generate' ? datasets.length === 1 && !!selectedReport && !!generationRange && (generationAll || cities.length > 0) : datasets.every(moduleDataset) && !invalidBaizeMix && !invalidXiaoxiangMix && !invalidMerchantMix && datasets.length > 0 && (merchantOnly?(cities.length>0&&merchantDateValid):(archiveOnly || blueOnly || (xiaoxiangDated && xiaoxiangDateValid) || (cities.length > 0 && validDates)));
   const monthlyDatasets = datasets.filter(dataset => MONTHLY_DATASETS.has(dataset));
   const periodDatasets = datasets.filter(dataset => !isLanorange(dataset) && !MONTHLY_DATASETS.has(dataset) && !SNAPSHOT_DATASETS.has(dataset) && !['payment_binding', 'abnormal_followup'].includes(dataset));
   const followupDatasets = ['payment_binding', 'abnormal_followup'].filter(id => datasets.includes(id));
@@ -470,7 +492,14 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   earliestOrderDate.setUTCDate(earliestOrderDate.getUTCDate() - orderWindowDays + 1);
   const earliestOrder = earliestOrderDate.toISOString().slice(0, 10);
   const orderWindowWarning = datasets.some(dataset => ['fraud', 'problem'].includes(dataset)) && validDates && (start < earliestOrder || end > shanghaiToday());
-  const currentSelection = { task_kind: taskKind, ...(taskKind === 'generate' ? { generation_target: datasets[0] } : {}), cities: blueOnly || xiaoxiangOnly || baizeOnly ? ['全部城市'] : cities, datasets, ...(datasets.some(isLanorange) || blueOnly ? {lanorange_full_delivery:true} : {}),
+  const currentSelection: CreateSelection = taskKind === 'generate' ? {
+    task_kind: 'generate', generation_target: datasets[0], datasets,
+    cities: generationAll ? ['全部城市'] : cities,
+    start: generationAll ? shanghaiToday() : generationRange?.start || start,
+    end: generationAll ? shanghaiToday() : generationRange?.end || end,
+    ...(datasets.some(isLanorange) ? {lanorange_full_delivery:true} : {}),
+    ...(selectedReport?.station_rule === 'separation' && !generationAll && includeSeparation ? {include_separation:true} : {}),
+  } : { task_kind: taskKind, cities: blueOnly || xiaoxiangOnly || baizeOnly ? ['全部城市'] : cities, datasets, ...(datasets.some(isLanorange) || blueOnly ? {lanorange_full_delivery:true} : {}),
     start: archiveOnly ? shanghaiToday() : xiaoxiangDated ? start : blueOnly||baizeOnly||merchantSnapshotOnly ? shanghaiToday() : start, end: archiveOnly ? shanghaiToday() : xiaoxiangDated ? end : blueOnly||baizeOnly||merchantSnapshotOnly ? shanghaiToday() : end,
     ...(refreshHistory && datasets.some(dataset => ['fraud', 'problem'].includes(dataset)) ? { refresh_history: true } : {}),
     ...(merchantOnly?{merchant_by_city:true}:{}), ...(includeSeparation && !noCity && !merchantOnly ? { include_separation: true } : {}) };
@@ -539,6 +568,14 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
     }
     categorySelections.current[taskKind] = datasets;
     categorySelections.current[inferTaskKind(run.datasets)] = run.datasets;
+    if (inferTaskKind(run.datasets) === 'generate') {
+      scopeSelections.current.generate = {
+        cities:run.cities.filter(city => city !== '全部城市' && (!options || options.cities.some(item => item.name === city && !item.disabled))),
+        start:!run.datasets.every(isLanorange) && DATE_PATTERN.test(run.start) ? run.start : start,
+        end:!run.datasets.every(isLanorange) && DATE_PATTERN.test(run.end) ? run.end : end,
+        includeSeparation:false,
+      };
+    }
     onTaskKindChange?.(inferTaskKind(run.datasets));
     setCities(run.cities.filter(city => city !== '全部城市' && (!options || options.cities.some(item => item.name === city && !item.disabled))));
     setDatasets(run.datasets.filter(id => !options || options.datasets.some(item => item.id === id)));
@@ -577,6 +614,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         id: run.id,
         name: run.datasets.map(datasetLabel).join('、'),
       });
+      if (taskKind === 'generate') selectRun(run);
       void refreshRef.current();
     } catch (error) {
       const rejected = error instanceof DownloadRequestError && [400, 401, 403, 404, 409, 415, 422].includes(error.status);
@@ -747,7 +785,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const fieldStyle = 'min-w-0 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-sky-600 focus:outline-none [color-scheme:light]';
 
   return (
-    <div className="relative z-10 mx-auto flex w-full max-w-6xl min-w-0 flex-col gap-4 pb-5 text-slate-900">
+    <div className="relative z-10 mx-auto flex w-full max-w-full min-w-0 flex-col gap-4 pb-5 text-slate-900">
       {!embedded && <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2.5 text-xl font-semibold"><CloudDownload size={23} className="text-sky-700" />下载中心</h1>
@@ -775,60 +813,34 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         return (
           <>
             {view === 'create' && <>
-              <section className={`${panel} wb-task-form wb-download-workbench`} aria-label="新建下载配置">
-                <div className="wb-form-heading">
+              <section className={taskKind === 'generate' ? 'rb-shell' : `${panel} wb-task-form wb-download-workbench`} aria-label={taskKind === 'generate' ? '业务报表配置' : '新建下载配置'}>
+                {taskKind === 'download' && <div className="wb-form-heading">
                   <div className="wb-stage-heading-left">
                     <div className="wb-stage-title-row">
                       <h2>{stageMeta.title}</h2>
                     </div>
                     <p className="wb-muted">{stageMeta.subtitle}</p>
                   </div>
-                </div>
+                </div>}
           {optionsError && !options ? <div role="alert" className="flex flex-wrap items-center gap-3 p-5 text-sm text-rose-700"><AlertCircle size={17} />{optionsError}<button className={smallButton} onClick={() => optionsError.includes('请刷新工作台') || optionsError.includes('账号页面已更新') ? location.reload() : setOptionVersion(version => version + 1)}>重新加载</button></div>
             : !options ? <p role="status" className="flex items-center gap-2 p-6 text-sm text-slate-500"><Loader2 size={16} />正在加载下载选项…</p>
             : <>
               {optionsError && <p role="alert" className="wb-full-span flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 sm:px-6"><AlertCircle size={14} />城市清单刷新失败，仍显示上次结果：{optionsError}</p>}
+              {taskKind === 'generate' && <ReportBuilder
+                reports={(options.generators || []).filter(report => options.datasets.some(dataset => dataset.id === report.id))} selectedId={datasets[0] || ''}
+                onSelect={id => { setDatasets([id]); setDuplicateApproval(''); }}
+                cities={options.cities} selectedCities={cities} onCities={setCities}
+                start={start} end={end} today={shanghaiToday()} onStart={setStart} onEnd={setEnd}
+                includeSeparation={includeSeparation} onSeparation={setIncludeSeparation}
+                locked={formLocked} creating={creating} disabled={creating || (!uncertainCreate && !canSubmit)}
+                submitLabel={uncertainCreate ? '确认原请求' : matchingRun && !TERMINAL_STATUSES.has(matchingRun.status) ? '查看进行中任务' : completedMatch && duplicateApproval !== currentSelectionKey ? '查看已有结果' : '生成报表'}
+                onSubmit={() => void startDownload(currentSelectionKey)}
+                uncertain={uncertainCreate} duplicate={!!completedMatch} recollect={duplicateApproval === currentSelectionKey}
+                onRecollect={value => setDuplicateApproval(value ? currentSelectionKey : '')}
+                refreshing={optionsLoading} onRefreshCities={() => setOptionVersion(value => value + 1)}
+              />}
+              {taskKind === 'download' && <>
               <div className="wb-download-main space-y-5 p-4 sm:p-6">
-                {taskKind === 'generate' && <section className="wb-generation-form" aria-label="业务表生成配置">
-                  <div className="wb-row wb-space">
-                    <span className="wb-section-label">选择目标业务报表</span>
-                    <span className="wb-muted">单次生成一张标准业务报表，底层来源自动关联校验</span>
-                  </div>
-                  <label className="sr-only"><span>生成内容</span><select className="wb-input" aria-label="生成内容" value={datasets[0] || 'payment_binding'} disabled={formLocked} onChange={event => { setDatasets([event.target.value]); setDuplicateApproval(''); }}>
-                    {options.datasets.filter(dataset => isGenerator(dataset.id)).map(dataset => <option key={dataset.id} value={dataset.id}>{dataset.label.replace('（生成表）', '')}</option>)}
-                  </select></label>
-                  <div className="wb-report-card-grid" role="radiogroup" aria-label="业务报表类型卡片">
-                    {GENERATION_REPORT_CARDS.filter(card => options.datasets.some(d => d.id === card.id)).map(card => {
-                      const active = (datasets[0] || 'payment_binding') === card.id;
-                      const genMeta = options.generators?.find(item => item.id === card.id);
-                      return (
-                        <button
-                          key={card.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={active}
-                          disabled={formLocked}
-                          onClick={() => { setDatasets([card.id]); setDuplicateApproval(''); }}
-                          className={`wb-report-card ${active ? 'is-selected' : ''}`}
-                        >
-                          <div className="wb-report-card-top">
-                            <div className="wb-row gap-1.5">
-                              {card.systems.map(sys => (
-                                <span key={sys} className={`wb-sys-badge is-${sys === '蓝橙' ? 'lanorange' : 'fengshen'}`}>{sys}</span>
-                              ))}
-                            </div>
-                            <span className="wb-report-granularity">{card.granularity}</span>
-                          </div>
-                          <strong className="wb-report-card-title">{card.title}</strong>
-                          <p className="wb-report-card-desc">{genMeta?.description || card.summary}</p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {datasets[0] === 'abnormal_riders' && <p className="wb-notice">处理范围：全部城市、全量状态。不按城市和日期筛选，无需风神认证。</p>}
-                  <details className="wb-generation-sources" open><summary>所需资料 · 系统自动关联（{options.generators?.find(item => item.id === datasets[0])?.sources.length || 0} 项）</summary><ul>{options.generators?.find(item => item.id === datasets[0])?.sources.map(source => <li key={source}><span>{source}</span><span className="wb-muted">执行时检查</span></li>)}</ul><p className="wb-muted">关键资料不完整时生成会停止，保留原任务供检查和恢复。</p></details>
-                </section>}
-
                 {taskKind === 'download' && <>
                 {!platform&&<div className="wb-system-overview-bar" role="group" aria-label="四大系统数据源切换">
                   <div className="wb-row">
@@ -973,13 +985,13 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                       <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
                         <input
                           type="checkbox"
-                          aria-label="是否含取分离站点"
+                          aria-label="仅下载取分离站点"
                           checked={includeSeparation}
                           disabled={formLocked}
                           onChange={event => setIncludeSeparation(event.target.checked)}
                           className="accent-sky-700 h-3.5 w-3.5 rounded border-slate-300"
                         />
-                        <span>包含取分离站点 <span className="font-normal text-slate-400">（默认排除取分离）</span></span>
+                        <span>仅下载取分离站点 <span className="font-normal text-slate-400">（不勾选则排除取分离）</span></span>
                       </label>
                       {datasets.some(dataset => ['fraud', 'problem'].includes(dataset)) && (
                         <label className="flex items-center gap-1.5 cursor-pointer text-slate-500">
@@ -1139,7 +1151,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                   >
                     {creating ? <Loader2 size={16} className="animate-spin" /> : <CloudDownload size={16} />}
                     <span>
-                      {creating ? '提交中…' : uncertainCreate ? '确认原请求' : matchingRun && !TERMINAL_STATUSES.has(matchingRun.status) ? '查看进行中任务' : completedMatch && duplicateApproval !== currentSelectionKey ? '查看已有文件' : taskKind === 'generate' ? '开始生成报表' : '开始下载'}
+                      {creating ? '提交中…' : uncertainCreate ? '确认原请求' : matchingRun && !TERMINAL_STATUSES.has(matchingRun.status) ? '查看进行中任务' : completedMatch && duplicateApproval !== currentSelectionKey ? '查看已有文件' : '开始下载'}
                     </span>
                   </button>
                   <p className={`wb-compact-submit-hint ${submitReady ? 'is-ready' : 'is-warn'}`}>
@@ -1168,6 +1180,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                   )}
                 </div>
               </aside>
+              </>}
             </>}
         </section>
       </>}
@@ -1212,6 +1225,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                 datasetLabel={id => id === 'payroll' ? '兼职薪资核算' : datasetLabel(id)} refreshVersion={navigation?.version} unified onOpenPayroll={onOpenPayroll}
                 onNavigateGenerate={onNavigateGenerate}
                 onNavigatePayroll={onNavigatePayroll}
+                onOpenPrice={onOpenPrice}
         onOpenAttempt={id => {
           setRequestError('');
           attemptOpenController.current?.abort();
@@ -1221,70 +1235,6 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         }}
         execution={<>
 {selectedRun && <div className={`${panel} wb-task-detail min-w-0 space-y-4 p-4 sm:p-5`}>
-              <TaskFlowSteps status={selectedRun.status} />
-              <section className="wb-task-recovery" aria-label="任务恢复与资料保留" role="status">
-                <strong>{waitingLogin ? '等待本人完成平台验证' : activeRun ? '正在处理原任务' : '已保留本任务资料'}</strong>
-                <p>{selectedRun.cities.join('、')} · {selectedRun.start} 至 {selectedRun.end} · 编号 {selectedRun.archive_code || selectedRun.id.slice(0,6).toUpperCase()}</p>
-                {(() => { const info = recoverySummary(selectedRun.items || []); return <p>已完成 {info.retained} 项 · 可继续 {info.continuing} 项 · 未提交可重试 {info.unsubmitted} 项 · 需核对 {info.blocked} 项</p>; })()}
-                <small>关闭页面不取消任务。优先复用已保留资料；结果未知时先核对原回执，不自动重提导出。</small>
-              </section>
-              {/* 置顶最终成品交付清单 */}
-              {(() => {
-                const primaryFiles = (selectedRun.files || []).filter(f => f.name.endsWith('.xlsx') || f.name.endsWith('.xls'));
-                const otherFiles = (selectedRun.files || []).filter(f => !f.name.endsWith('.xlsx') && !f.name.endsWith('.xls'));
-                return primaryFiles.length > 0 ? (
-                  <div className="p-3.5 rounded-xl border border-emerald-300 bg-emerald-50/80 space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
-                        <FileSpreadsheet size={15} className="text-emerald-700" />
-                        最终成品交付工作簿 ({primaryFiles.length})
-                      </span>
-                      <span className="rounded bg-emerald-200 text-emerald-900 text-[10px] font-bold px-2 py-0.5">置顶成品</span>
-                    </div>
-                    <div className="space-y-1.5">
-                      {primaryFiles.map(file => (
-                        <div key={file.id} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-white border border-emerald-200 text-xs shadow-xs">
-                          <div className="min-w-0 flex-1">
-                            <span className="font-semibold text-slate-800 truncate block">{file.name}</span>
-                            <small className="text-slate-500">{file.city} · {(file.bytes / 1024).toFixed(1)} KB</small>
-                          </div>
-                          <button type="button" disabled={!!fileBusy} onClick={() => void downloadFile(file.id, file.name)}
-                            className="wb-primary text-xs py-1 px-3 inline-flex items-center gap-1 shrink-0">
-                            <Download size={13} />
-                            {fileBusy === file.id ? '下载中…' : '一键下载'}
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* 跨页面流水线联动操作 */}
-                    {!selectedRun.datasets.every(isBaize) && selectedRun.cities?.length > 0 && (onNavigateGenerate || onNavigatePayroll) && (
-                      <div className="pt-2 border-t border-emerald-200 flex flex-wrap gap-2">
-                        {onNavigateGenerate && (
-                          <button
-                            type="button"
-                            className="wb-button text-xs py-1 px-2.5 bg-white border-emerald-300 text-emerald-800 hover:bg-emerald-100 font-medium inline-flex items-center gap-1 shadow-xs"
-                            onClick={() => onNavigateGenerate(selectedRun.cities, selectedRun.start, selectedRun.end)}
-                          >
-                            <FileSpreadsheet size={13} />
-                            以此数据生成报表
-                          </button>
-                        )}
-                        {onNavigatePayroll && (
-                          <button
-                            type="button"
-                            className="wb-button text-xs py-1 px-2.5 bg-white border-emerald-300 text-emerald-800 hover:bg-emerald-100 font-medium inline-flex items-center gap-1 shadow-xs"
-                            onClick={() => onNavigatePayroll(selectedRun.cities[0])}
-                          >
-                            <Calculator size={13} />
-                            以此数据发起兼职结算
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : null;
-              })()}
 
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div><h3 className="flex flex-wrap items-center gap-2 text-base font-semibold text-slate-900">{selectedRun.datasets.every(isBaize) ? '商翼全量员工资料' : selectedRun.datasets.every(isLanorange) ? (selectedRun.lanorange_by_city ? `蓝橙 ${selectedRun.cities.join('、')}` : '蓝橙全量') : selectedRun.cities.length > 2 ? `${selectedRun.cities.length} 个城市` : selectedRun.cities.join('、')}的下载任务 <span className={`rounded-md px-2 py-1 text-xs font-normal ${statusInfo(selectedRun.status).color}`}>{runStatusLabel}</span></h3><p className="mt-2 text-xs text-slate-500">{selectedRun.datasets.every(isLanorange) ? (selectedRun.lanorange_by_city ? '所选城市、全部状态、不按日期筛选' : '全部城市、全部状态、不按日期筛选') : `${selectedRun.start} 至 ${selectedRun.end}`} · {selectedRun.datasets.length} 类资料</p></div>
@@ -1330,21 +1280,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                 {selectedRun.performance.source_cache && <p className="wb-muted">本任务解析缓存命中 {selectedRun.performance.source_cache.hits} 次；临时大表缓存 {selectedRun.performance.source_cache.spill_files || 0} 份、{((selectedRun.performance.source_cache.spill_bytes || 0) / 1048576).toFixed(1)} MB。任务结束自动清理；内存为服务进程采样，非任务独占。</p>}
               </details>}
               <details className="border-t border-slate-200 pt-3 text-xs text-slate-500"><summary className="cursor-pointer w-fit">任务信息与保存位置</summary><div className="mt-3 space-y-2"><p>编号：{selectedRun.archive_code || selectedRun.id.slice(0, 6).toUpperCase()}</p><p className="break-all">任务目录：{selectedRun.archive_relative_dir || '旧版任务保留原存放位置'}</p><p>城市：{selectedRun.cities.join('、')}</p><p>资料：{selectedRun.datasets.map(datasetLabel).join('、')}</p>{selectedRun.retry_of && <p>此任务处理原任务 {selectedRun.retry_of.slice(0, 6).toUpperCase()} 的未完成项。</p>}{selectedRun.recovery_of && <p>此任务恢复原有平台导出。</p>}{!activeRun && <button type="button" className={smallButton} disabled={rawBusy} onClick={() => void downloadRawBundle()}>下载已保留原始资料</button>}{selectedRun.last_activity_at && <p>最近进展：{displayTime(selectedRun.last_activity_at)}</p>}{!activeRun && <button type="button" className={smallButton} disabled={!!downloadingSummaryId} onClick={() => void downloadSummary()}>{downloadingSummaryId ? <Loader2 size={14} /> : <Download size={14} />}下载说明</button>}</div></details>
-              {(() => {
-                const otherFiles = (selectedRun.files || []).filter(f => !f.name.endsWith('.xlsx') && !f.name.endsWith('.xls'));
-                return otherFiles.length > 0 ? (
-                  <details className="wb-original-versions">
-                    <summary>中间与原始文件版本 ({otherFiles.length} 个)</summary>
-                    <p className="wb-muted">用于核对历史版本；当前可用成品请直接在上方领取。</p>
-                    {otherFiles.map(file => (
-                      <div className="wb-row wb-space" key={file.id}>
-                        <span className="wb-record-filename">{file.name}</span>
-                        <button type="button" className="wb-button" disabled={!!fileBusy} onClick={() => void downloadFile(file.id, file.name)}>领取原版本</button>
-                      </div>
-                    ))}
-                  </details>
-                ) : null;
-              })()}
+
               {!!selectedRun.logs?.length && <details className="border-t border-slate-200 pt-3 text-xs text-slate-600"><summary className="cursor-pointer w-fit">执行日志</summary><div className="mt-3 max-h-48 space-y-2 overflow-y-auto font-mono bg-slate-50 border border-slate-200 rounded-lg p-3">{selectedRun.logs.map((log, index) => <p key={index} className="break-words"><span className="mr-2 text-slate-400">{displayTime(log.time)}</span>{log.message}</p>)}</div></details>}
             </div>}
         </>}

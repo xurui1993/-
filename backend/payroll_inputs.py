@@ -87,6 +87,27 @@ def save(folder, state):
     atomic_json(folder / 'manifest.json', state)
 
 
+def delivery_store():
+    from delivery_store import project_store, DeliveryStore
+    from download_jobs import ROOT as project_root
+    if Path(ROOT).resolve()==project_root.resolve():return project_store()
+    return DeliveryStore(Path(ROOT)/'backend/.local_downloads/deliveries.sqlite3',Path(ROOT)/'outputs/fengshen_downloads')
+
+
+def publish_result(wid, folder, state):
+    from delivery_store import external_delivery
+    store=delivery_store();key='payroll:'+wid+':'+state['id']
+    output=Path(state.get('result',{}).get('output') or '').resolve()
+    existing=store.directory(key)
+    if existing is not None and output==existing:return existing
+    allowed=(Path(ROOT)/'backend/.local_downloads/workspaces/payroll'/wid/state['id'],Path(ROOT)/'outputs/payroll_batches'/wid/state['id'])
+    if not any(output.is_relative_to(base.resolve()) for base in allowed) or output.is_symlink():
+        raise SourceError('核算结果不在本批次目录内')
+    destination=external_delivery(key,state['created_at'],'薪资核算_'+state['plan']['city']+'_'+state['plan']['start'][:7],output,store=store)
+    state['result']['output']=str(destination);save(folder,state)
+    return destination
+
+
 def public(state):
     result = {key: state[key] for key in ('id', 'mode', 'plan', 'status', 'items', 'jobs')}
     result.update({key: state[key] for key in ('created_at', 'result', 'performance') if key in state})
@@ -466,7 +487,7 @@ async def run_payroll(config, request):
             skip_binding_check=state['mode'] != 'xiaoxiang' and state['items']['payment_binding']['status'] == 'omitted',
             input_snapshot=public(state) if state['mode'] != 'xiaoxiang' else None,
             prepared_plan=plan, verified_inputs={str(path): value[0] for path, value in verified_hashes(folder, state).items()},
-            output_root=str((Path(ROOT) / 'outputs' / 'payroll_batches' / wid / state['id']).resolve())):
+            output_root=str((Path(ROOT) / 'backend/.local_downloads/workspaces/payroll' / wid / state['id']).resolve())):
         if event.startswith('data: '):
             result = json.loads(event[6:])
             if result.get('type') == 'payroll_performance':
@@ -480,6 +501,12 @@ async def run_payroll(config, request):
                 output = Path(result.get('out_file') or '')
                 if result.get('out_file') and output.is_dir():
                     atomic_json(output / ('核算资料清单_' + state['id'][:8] + '.json'), state)
+                try:
+                    destination=publish_result(wid,folder,state)
+                    result['out_file']=str(destination)
+                    event='data: '+json.dumps(result,ensure_ascii=False)+'\n\n'
+                except (OSError,ValueError,SourceError):
+                    yield tasks.create_log_event('核算已完成，结果目录发布未完成；原结果已保留，可在任务中心重新领取。','WARN')
                 yield 'data: ' + json.dumps({'type': 'payroll_preparation', 'preparation': public(state)}, ensure_ascii=False) + '\n\n'
             elif result.get('type') == 'finish' and result.get('status') == 'error':
                 state['status'] = 'ready'

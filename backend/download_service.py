@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import hashlib_compat
 import json
+import os
 from pathlib import Path
 import re
 from generation_performance import profiled, transition, shared_cache, generation_context, TableExchange
@@ -692,6 +693,10 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
                                 description["end"], suffix=path.suffix,
                                 stamp=config.get("archive_created_at"),
                                 variant="系统合并" if description.get('delivery_kind') == 'system_merged' else None)
+        if config.get('result_layout') == 2:
+            from task_catalog import GENERATORS
+            category = '来源' if config.get('task_kind') == 'generate' and description['dataset'] not in GENERATORS else '结果'
+            directory = root / category / archive_component(description['city'])
         target = (Path(directory) / name).resolve()
         if not path.is_relative_to(root) or not target.is_relative_to(root) or not path.is_file():
             raise BillCollectionError("输出文件路径无效")
@@ -744,7 +749,10 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
         try:
             if path != target:
                 step_created.append(target)
-                shutil.copy2(path, target)
+                if config.get('result_layout') == 3 and description['dataset'] in ('payment_binding','abnormal_followup','abnormal_riders','lanorange_summary'):
+                    os.replace(path,target)
+                else:
+                    shutil.copy2(path, target)
             target_hash = _hash(target)
             if target.stat().st_size != source_size or target_hash != source_hash:
                 raise BillCollectionError("归档成品与已校验原文件不一致，未发布文件")

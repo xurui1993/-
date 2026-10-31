@@ -1,421 +1,119 @@
-import { needsAction, prioritizeTasks } from '../lib/taskFlow';
-import { readDownloadResponse, saveDownloadBlob, downloadOutput, downloadErrorMessage } from '../lib/outputDownload';
 import React, { useEffect, useRef, useState } from 'react';
-import { Download, RefreshCw, ChevronDown, Loader2, FileCheck2, FolderArchive, Activity, FileSpreadsheet, Calculator, FileText } from 'lucide-react';
-import { phaseLabel, isLanorange } from '../lib/downloadCenterLogic';
-import { TASK_KIND_LABELS, type TaskKind } from '../lib/taskCatalog';
-import { inferDatasetSystemTag, SYSTEM_META } from '../lib/workbench';
-import { matchesRecordModule,type RecordModule } from '../lib/downloadModules';
+import { Download, FolderOpen, RefreshCw, Search, ChevronDown, Archive } from 'lucide-react';
+import { readDownloadResponse, saveDownloadBlob, downloadErrorMessage } from '../lib/outputDownload';
+import { datasetGroup, isGlobalDataset, type DownloadFetch } from '../lib/downloadCenterLogic';
+import type { RecordModule } from '../lib/downloadModules';
+import { WorkbenchDrawer } from './WorkbenchDrawer';
 
-interface RecordFile { id: string; run_id: string; name: string; city: string; dataset: string; bytes: number; available: boolean; unavailable_reason?: string; outdated?: boolean }
-interface DownloadRecord {
-  kind?: TaskKind | 'payroll_source'; batch_id?: string; batch_status?: string; output?: string; applicants?: number; source_files?: RecordFile[];
-  id: string; cities: string[]; datasets: string[]; start: string; end: string; status: string; phase?: string;
-  created_at: string; updated_at: string; files: RecordFile[]; available_files: number; failed_items: number;
-  completed_items: number; total_items: number; action_run_id: string; member_ids: string[];
-  attempts: { id: string; status: string; created_at: string; retry_of?: string; recovery_of?: string }[];
-  incomplete_lineage?: boolean;
-  summary_issue?: boolean;
-  lanorange_full_delivery?: boolean;
+interface File { id:string; run_id:string; name:string; city:string; bytes:number; available:boolean; unavailable_reason?:string }
+interface Task {
+  id:string; kind:string; title?:string; price_id?:string; batch_id?:string; output?:string;
+  cities:string[]; datasets:string[]; start:string; end:string; status:string; created_at:string;
+  files:File[]; source_files?:File[]; available_files:number; failed_items:number; completed_items:number; total_items:number;
+  member_ids:string[]; attempts:{id:string;status:string}[]; action_run_id:string; summary_issue?:boolean;
 }
-const ACTIVE = new Set(['queued', 'running', 'waiting_login', 'waiting_manual', 'cancelling', 'preparing']);
-const ATTENTION = new Set(['waiting_login', 'waiting_manual', 'waiting_materials', 'pending_download', 'ready', 'partial', 'error', 'interrupted']);
-const LABELS: Record<string, string> = { queued: '排队中', running: '处理中', waiting_login: '等待认证', waiting_manual: '等待验证', cancelling: '正在停止', success: '已完成', partial: '部分完成', error: '未完成', cancelled: '已取消', interrupted: '已中断', pending_download: '待准备资料', preparing: '准备资料中', waiting_materials: '待处理缺项', ready: '资料已就绪' };
-const timestamp = (value: string) => new Date(value).toLocaleString('zh-CN', { hour12: false });
-const recordSystemTags = (record: DownloadRecord): ('风神' | '蓝橙' | '商翼' | '小象灯塔' | '灯塔')[] => {
-  if (record.kind === 'payroll') return ['风神', '蓝橙'];
-  const tags = new Set<'风神' | '蓝橙' | '商翼' | '小象灯塔' | '灯塔'>();
-  for (const id of record.datasets || []) tags.add(inferDatasetSystemTag(id));
-  return tags.size ? [...tags] : ['风神'];
-};
-const sysBadgeClass = (tag: '风神' | '蓝橙' | '商翼' | '小象灯塔' | '灯塔') =>
-  tag === '蓝橙' ? 'is-lanorange' : tag === '商翼' ? 'is-baize' : tag === '灯塔' || tag === '小象灯塔' ? 'is-dengta' : 'is-fengshen';
+const API='/api/workbench/task-center';
+const ACTIVE=new Set(['queued','running','waiting_login','waiting_manual','cancelling','preparing','stopping']);
+const ENDED=new Set(['success','partial','error','cancelled','interrupted']);
+const LABELS:Record<string,string>={queued:'排队中',running:'处理中',waiting_login:'等待认证',waiting_manual:'等待验证',cancelling:'停止中',stopping:'停止中',success:'已完成',partial:'部分完成',error:'未完成',cancelled:'已取消',interrupted:'已中断',pending_download:'待准备资料',preparing:'准备资料中',waiting_materials:'待处理缺项',ready:'资料已就绪',needs_review:'待核实'};
+const KINDS:Record<string,string>={download:'资料下载',generate:'业务报表',payroll:'薪资核算',approval:'价格审批','price-export':'每日价格'};
+const SYSTEMS:Record<string,string>={fengshen:'风神',lanorange:'蓝橙',baize:'商翼',xiaoxiang:'灯塔'};
+const stamp=(v:string)=>v?new Date(v).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'—';
+const size=(n:number)=>n>=1048576?`${(n/1048576).toFixed(1)} MB`:`${Math.max(1,Math.ceil(n/1024))} KB`;
 
-
-export function DownloadRecords({ apiFetch, workspaceId, selectedRunId, onOpenAttempt, execution, datasetLabel, refreshVersion = 0, unified = false,recordModule,onOpenPayroll, onNavigateGenerate, onNavigatePayroll }: {
-  apiFetch: (url: string, init?: RequestInit) => Promise<Response>; workspaceId: string; selectedRunId: string;
-  onOpenAttempt: (id: string) => void; execution: React.ReactNode; datasetLabel: (id: string) => string; refreshVersion?: number; unified?: boolean; onOpenPayroll?: (id: string) => void;
-  onNavigateGenerate?: (cities: string[], start: string, end: string) => void;
-  onNavigatePayroll?: (city?: string) => void; recordModule?: RecordModule;
+export function DownloadRecords({apiFetch,workspaceId,selectedRunId,onOpenAttempt,execution,datasetLabel,refreshVersion=0,recordModule,onOpenPayroll,onNavigateGenerate,onNavigatePayroll,onOpenPrice}:{
+  apiFetch:DownloadFetch; workspaceId:string; selectedRunId:string; onOpenAttempt:(id:string)=>void; execution:React.ReactNode;
+  datasetLabel:(id:string)=>string; refreshVersion?:number; unified?:boolean; recordModule?:RecordModule; onOpenPayroll?:(id:string)=>void;
+  onNavigateGenerate?:(cities:string[],start:string,end:string)=>void; onNavigatePayroll?:(city?:string)=>void; onOpenPrice?:(view:'approval'|'price-export')=>void;
 }) {
-  const api = useRef(apiFetch); api.current = apiFetch;
-  const [records, setRecords] = useState<DownloadRecord[]>([]);
-  const [expanded, setExpanded] = useState('');
-  const [summaryRecord, setSummaryRecord] = useState('');
-  const [showHistory, setShowHistory] = useState(false);
-  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 700px)').matches);
-  useEffect(() => { const query=window.matchMedia('(max-width: 700px)'); const update=()=>setMobile(query.matches); query.addEventListener('change',update); return ()=>query.removeEventListener('change',update); }, []);
-  const resumedRecordId = records.find(record => record.member_ids?.includes(selectedRunId))?.id;
-  useEffect(() => { if (resumedRecordId) setExpanded(resumedRecordId); }, [resumedRecordId]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [failedBundle, setFailedBundle] = useState<DownloadRecord | null>(null);
-  const [pollError, setPollError] = useState('');
-  const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('');
-  const [systemTag, setSystemTag] = useState<'' | '风神' | '蓝橙' | '商翼' | '小象灯塔' | '灯塔'>('');
-  const [kind, setKind] = useState('');
-  const [city, setCity] = useState('');
-  const [dataset, setDataset] = useState('');
-  const [availableOnly, setAvailableOnly] = useState(false);
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [version, setVersion] = useState(0);
-  const [busy, setBusy] = useState('');
-  const busyRef = useRef(false);
-  const controllers = useRef(new Set<AbortController>());
-  const [bundleCity, setBundleCity] = useState<Record<string, string>>({});
-  useEffect(() => () => { for (const controller of controllers.current) controller.abort(); }, []);
-  useEffect(() => {
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>; let stopped = false;
-    const poll = async () => {
+  const api=useRef(apiFetch);api.current=apiFetch;
+  const [records,setRecords]=useState<Task[]>([]),[total,setTotal]=useState(0),[page,setPage]=useState(1),[pages,setPages]=useState(1);
+  const [counts,setCounts]=useState<Record<string,number>>({}),[search,setSearch]=useState(''),[query,setQuery]=useState('');
+  const [status,setStatus]=useState(''),[system,setSystem]=useState(''),[kind,setKind]=useState('');
+  const [from,setFrom]=useState(''),[to,setTo]=useState(''),[archived,setArchived]=useState(false);
+  const [selected,setSelected]=useState<string[]>([]),[focused,setFocused]=useState<Task|null>(null),[filesOpen,setFilesOpen]=useState('');
+  const [version,setVersion]=useState(0),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false);
+  const [error,setError]=useState(''),[notice,setNotice]=useState(''),[pollError,setPollError]=useState('');
+  const [confirm,setConfirm]=useState<Task[]|null>(null);
+  const [directory,setDirectory]=useState<{path:string;exists:boolean;can_open:boolean;record_id?:string}|null>(null);
+  const busyRef=useRef(false),focusRef=useRef<Task|null>(null),selectedRef=useRef<string[]>([]);
+  focusRef.current=focused;selectedRef.current=selected;
+  const reset=()=>{setPage(1);setSelected([]);setFilesOpen('');};
+  useEffect(()=>{const timer=setTimeout(()=>{setQuery(search);reset();},300);return()=>clearTimeout(timer);},[search]);
+  useEffect(()=>{
+    const controller=new AbortController();let timer:ReturnType<typeof setTimeout>;
+    const poll=async()=>{
       try {
-        const response = await api.current(unified ? '/api/workbench/tasks' : '/api/fengshen-downloads/records', { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]) });
-        const data = await response.json(); if (!response.ok) throw new Error(data.detail || '下载记录读取失败');
-        if (!stopped) { setRecords(data.records.filter((record:DownloadRecord)=>matchesRecordModule(record,recordModule))); setPollError(''); setLoading(false); }
-      } catch (error) { if (!stopped) { setPollError(error instanceof Error ? error.message : '记录读取失败'); setLoading(false); } }
-      if (!stopped) timer = setTimeout(poll, 5000);
-    };
-    void poll(); return () => { stopped = true; controller.abort(); clearTimeout(timer); };
-  }, [version, selectedRunId, refreshVersion, unified,recordModule]);
-  const download = async (record: DownloadRecord, file?: RecordFile, city = '', sources = false) => {
-    if (busyRef.current) return;
-    busyRef.current = true; setBusy(file ? file.id : record.id); setError(''); setFailedBundle(null);
-    const controller = new AbortController(); controllers.current.add(controller);
-    try {
-      const query = new URLSearchParams(); if (city) query.set('city', city); if (sources) query.set('purpose', 'sources');
-      const url = file ? `/api/fengshen-downloads/runs/${file.run_id}/files/${file.id}` : `/api/fengshen-downloads/records/${record.id}/bundle${query.size ? `?${query}` : ''}`;
-      const response = await api.current(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]) });
-      if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.detail || data.error || '文件领取失败，请刷新记录后检查'); }
-      const filename = file ? file.name : `${sources ? '来源资料' : '任务结果'}_${record.id.slice(0, 8)}${city ? `_${city}` : ''}.zip`;
-      const blob = await readDownloadResponse(response, filename);
-      if (!controller.signal.aborted) saveDownloadBlob(blob, filename);
-    } catch (error) { if (!controller.signal.aborted) { setError(downloadErrorMessage(error)); if (!file) { setFailedBundle(record); setExpanded(record.id); } setVersion(value => value + 1); } }
-    finally { controllers.current.delete(controller); busyRef.current = false; setBusy(''); }
+        const params=new URLSearchParams({page:String(page),q:query,status,system,kind,from,to,archived:archived?'1':'0',module:recordModule||'',focus:focusRef.current?.id||''});
+        const response=await api.current(`${API}?${params}`,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(20000)])});
+        const data=await response.json();if(!response.ok)throw new Error(data.detail||'任务列表暂不可读');
+        if(controller.signal.aborted)return;
+        setRecords(previous=>selectedRef.current.length?previous.map(r=>data.records.find((next:Task)=>next.id===r.id)||r):data.records);setTotal(data.total);setPages(data.pages);setPage(data.page);setCounts(data.counts);setLoading(false);setPollError((data.warnings||[]).join('；'));
+        setFocused(previous=>previous?(data.focused?.id===previous.id?data.focused:data.records.find((r:Task)=>r.id===previous.id)||previous):null);
+      }catch(e){if(!controller.signal.aborted){setPollError(downloadErrorMessage(e));setLoading(false);}}
+      if(!controller.signal.aborted)timer=setTimeout(poll,5000);
+    };setLoading(true);void poll();return()=>{controller.abort();clearTimeout(timer);};
+  },[page,query,status,system,kind,from,to,archived,recordModule,version,refreshVersion]);
+  const title=(r:Task)=>r.title||(r.kind==='payroll'?'兼职薪资核算':r.datasets.map(datasetLabel).join('、').replaceAll('（生成表）',''));
+  const platform=(r:Task)=>r.price_id?'蓝橙':r.kind==='payroll'?'风神 / 蓝橙':[...new Set(r.datasets.map(id=>SYSTEMS[datasetGroup(id)]))].join(' / ');
+  const scope=(r:Task)=>!r.datasets.length?'详见业务记录':r.datasets.every(isGlobalDataset)?'全量':r.datasets.every(id=>id==='rider_archive')?'当前快照':`${r.start} 至 ${r.end}`;
+  const open=(r:Task)=>{setFocused(r);if(r.action_run_id){onOpenAttempt(r.action_run_id);}};
+  const request=async(url:string,payload?:unknown)=>{
+    const response=await api.current(url,payload===undefined?{signal:AbortSignal.timeout(120000)}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(120000)});
+    if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.detail||'操作未完成，请重试');}return response;
   };
-  const open = (record: DownloadRecord, attempt = record.action_run_id) => {
-    setExpanded(record.id);
-    if (attempt) onOpenAttempt(attempt);
+  const act=async(work:()=>Promise<void>)=>{
+    if(busyRef.current)return;busyRef.current=true;setBusy(true);setError('');setNotice('');
+    try{await work();}catch(e){setError(downloadErrorMessage(e));}finally{busyRef.current=false;setBusy(false);}
   };
-  const query = search.trim().toLowerCase();
-  const visible = records.filter(record => (!query || [...record.cities, ...record.datasets.map(datasetLabel), ...record.files.map(file => file.name)].join(' ').toLowerCase().includes(query))
-    && (!kind || record.kind === kind)
-    && (!systemTag || recordSystemTags(record).includes(systemTag))
-    && (!status || (status === 'active' ? ACTIVE.has(record.status) : status === 'attention' ? ATTENTION.has(record.status) : record.status === status))
-    && (!city || record.cities.includes(city)) && (!dataset || record.datasets.includes(dataset)) && (!availableOnly || record.available_files > 0)
-    && (!dateFrom || record.created_at.slice(0, 10) >= dateFrom) && (!dateTo || record.created_at.slice(0, 10) <= dateTo));
-
-  const hasFilters = !!(search || status || systemTag || kind || city || dataset || dateFrom || dateTo || availableOnly);
-  const prioritized = prioritizeTasks(visible, selectedRunId);
-  const currentTasks = prioritized.filter(record => needsAction(record.status) || record.member_ids.includes(selectedRunId)).slice(0, 5);
-  const displayedRecords = mobile && !showHistory && !hasFilters ? (currentTasks.length ? currentTasks : prioritized.slice(0,1)) : prioritized;
-  const focusedRecord = visible.find(item => item.id === expanded) || visible.find(item => item.member_ids?.includes(selectedRunId)) || visible[0] || null;
-  const activeCount = records.filter(item => ACTIVE.has(item.status)).length;
-  const attentionCount = records.filter(item => ATTENTION.has(item.status)).length;
-  const completedCount = records.filter(item => item.status === 'success').length;
-
-  return <section className="wb-records" aria-label={unified ? '任务记录' : '下载记录'}>
-    <div className="wb-row wb-space"><input className="wb-input wb-record-search" aria-label="搜索下载记录" placeholder="搜索任务、城市或文件名" value={search} onChange={event => setSearch(event.target.value)} /><div className="wb-row"><details className="wb-record-filter"><summary className="wb-button">更多筛选{status || systemTag || kind || city || dataset || dateFrom || dateTo || availableOnly ? ' · 已启用' : ''}</summary><div className="wb-card wb-record-filter-panel">
-      {unified && !recordModule && <select className="wb-select" aria-label="按任务类型筛选" value={kind} onChange={event => setKind(event.target.value)}><option value="">全部任务类型</option>{Object.entries(TASK_KIND_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>}
-      <select className="wb-select" aria-label="按状态筛选下载记录" value={status} onChange={event => setStatus(event.target.value)}><option value="">全部状态</option><option value="active">进行中</option><option value="attention">待处理</option>{['pending_download', 'waiting_materials', 'ready', 'success', 'partial', 'error', 'cancelled', 'interrupted'].map(value => <option value={value} key={value}>{LABELS[value]}</option>)}</select>
-      <select className="wb-select" aria-label="按城市筛选下载记录" value={city} onChange={event => setCity(event.target.value)}><option value="">全部城市</option>{[...new Set(records.flatMap(record => record.cities))].sort().map(value => <option key={value}>{value}</option>)}</select>
-      <select className="wb-select" aria-label="按资料筛选下载记录" value={dataset} onChange={event => setDataset(event.target.value)}><option value="">全部资料</option>{[...new Set(records.flatMap(record => record.datasets))].map(value => <option value={value} key={value}>{datasetLabel(value)}</option>)}</select>
-      <label className="wb-muted">下载日期从<input className="wb-input w-full" type="date" aria-label="下载日期从" value={dateFrom} onChange={event => setDateFrom(event.target.value)} /></label>
-      <label className="wb-muted">下载日期到<input className="wb-input w-full" type="date" aria-label="下载日期到" value={dateTo} onChange={event => setDateTo(event.target.value)} /></label>
-      <label className="wb-row"><input type="checkbox" checked={availableOnly} onChange={event => setAvailableOnly(event.target.checked)} />有可下载文件</label>
-      <button className="wb-link" onClick={() => { setSearch(''); setStatus(''); setSystemTag(''); setKind(''); setCity(''); setDataset(''); setAvailableOnly(false); setDateFrom(''); setDateTo(''); }}>清除筛选</button>
-    </div></details><button className="wb-icon" aria-label="刷新下载记录" onClick={() => setVersion(value => value + 1)}><RefreshCw size={16} /></button></div></div>
-    <div className="wb-records-filter-bars">
-      <div className="wb-quick-filters" role="group" aria-label="任务状态快捷筛选">
-        {[['', '全部'], ['active', '进行中'], ['attention', '待处理'], ['success', '已完成']].map(([value, label]) => (
-          <button key={value} type="button" aria-pressed={status === value} onClick={() => setStatus(value)}>{label}</button>
-        ))}
-      </div>
-      {(!recordModule||recordModule==='generate')&&<div className="wb-quick-filters" role="group" aria-label="业务来源筛选">
-        <button type="button" aria-pressed={systemTag === ''} onClick={() => setSystemTag('')}>全部系统</button>
-        {SYSTEM_META.filter((sys, idx, arr) => arr.findIndex(item => item.label === sys.label) === idx).map(sys => (
-          <button
-            key={sys.key}
-            type="button"
-            aria-pressed={systemTag === sys.label}
-            title={`${sys.label}（${sys.businessLine}）`}
-            onClick={() => setSystemTag(prev => prev === sys.label ? '' : sys.label)}
-          >
-            {sys.label}
-          </button>
-        ))}
-      </div>}
-    </div>
-    {pollError && <p role="status" className="wb-notice">{pollError}。连接恢复后会自动更新。</p>}
-    {error && <div role="alert" className="wb-error"><p>{error}</p>{failedBundle && <button type="button" className="wb-button mt-2" onClick={() => open(failedBundle)}>查看任务并逐个下载成品</button>}</div>}
-    <section className="wb-mobile-task-focus" aria-label="手机当前任务">
-      <strong>{showHistory || hasFilters ? '任务记录' : '当前与待处理任务优先'}</strong>
-      <p>{showHistory || hasFilters ? `共 ${visible.length} 条匹配记录` : `先展示 ${displayedRecords.length} 条；历史任务仍完整保留`}</p>
-      <button type="button" className="wb-button" aria-expanded={showHistory} onClick={() => setShowHistory(value=>!value)}>{showHistory ? '收起历史，回到当前任务' : `展开全部历史记录（${visible.length}）`}</button>
-    </section>
-    <div className="wb-records-master-detail">
-      <div className="wb-records-master">
-        {loading ? <p role="status" className="wb-empty">正在读取任务记录…</p> : !visible.length && !pollError ? <p className="wb-empty">{records.length ? '没有符合条件的任务。' : '暂无任务。新建任务后，可在这里查看进度和领取结果。'}</p> : null}
-        {displayedRecords.map(record => record.kind === 'payroll' ? <PayrollTaskCard key={record.id} record={record} focused={focusedRecord?.id === record.id} workspaceId={workspaceId} onFocus={() => setExpanded(record.id)} onOpen={() => { if (record.batch_id) onOpenPayroll?.(record.batch_id); }} /> : <article key={record.id} data-task-ids={record.member_ids.join(' ')} className={`wb-card wb-record ${focusedRecord?.id === record.id ? 'is-focused' : ''}`} aria-label={`${record.cities.join('、')}下载记录`} onClick={() => open(record)}>
-          <div className="wb-record-summary">
-            <div className="wb-record-description"><h3>{recordSystemTags(record).map(tag => <span key={tag} className={`wb-sys-badge mr-1.5 ${sysBadgeClass(tag)}`}>{tag}</span>)}{record.datasets.slice(0, 2).map(datasetLabel).join('、').replaceAll('（生成表）', '')}{record.datasets.length > 2 ? `等 ${record.datasets.length} 类资料` : ''}<span className="wb-kind-badge">{record.kind === 'generate' ? '业务表生成' : '资料下载'}</span></h3>
-              <p className="wb-muted">{record.cities.length > 2 ? `${record.cities.slice(0, 2).join('、')}等 ${record.cities.length} 个城市` : record.cities.join('、')} · {record.datasets.every(isLanorange) ? record.lanorange_full_delivery ? '全量范围' : '原任务范围' : `${record.start} 至 ${record.end}`}</p>
-              <p className="wb-muted">{timestamp(record.created_at)} · {record.available_files} 个结果文件{record.failed_items ? ` · ${record.failed_items} 项未完成` : ''}{record.files.some(file => !file.available && !file.outdated) ? ' · 部分文件不可访问' : ''}</p>
-            </div>
-            <span className={`wb-record-status ${record.status === 'success' ? 'wb-success' : 'wb-muted'}`}>{LABELS[record.status] || record.status}{record.phase && ACTIVE.has(record.status) ? ` · ${phaseLabel(record.phase)}` : ''}</span>
-            <div className="wb-row wb-record-actions" onClick={e => e.stopPropagation()}>
-              {ACTIVE.has(record.status) || record.failed_items > 0 || record.summary_issue ? <button type="button" className="wb-primary" onClick={() => open(record)}>{['waiting_login', 'waiting_manual'].includes(record.phase || record.status) ? '完成验证' : ACTIVE.has(record.status) ? '查看进度' : record.summary_issue && !record.failed_items ? '查看汇总问题' : '处理未完成项'}</button> : record.available_files > 0 ? <button type="button" className="wb-primary" disabled={!!busy} onClick={() => void download(record)}>{busy === record.id ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}下载本批次结果</button> : null}
-              {record.status === 'success' && !record.datasets.includes('baize_employees') && ((onNavigateGenerate && record.kind !== 'generate') || onNavigatePayroll) && <details className="wb-next-business"><summary className="wb-link">其他业务操作</summary>              {record.status === 'success' && !record.datasets.includes('baize_employees') && onNavigateGenerate && record.kind !== 'generate' && record.cities?.length > 0 && (
-                <button type="button" className="wb-button text-xs py-1 px-2.5 text-sky-700 hover:bg-sky-50" title="以此数据生成报表" onClick={() => onNavigateGenerate(record.cities, record.start, record.end)}>
-                  <FileSpreadsheet size={13} className="inline mr-1" />生成报表
-                </button>
-              )}
-              {record.status === 'success' && !record.datasets.includes('baize_employees') && onNavigatePayroll && record.cities?.length > 0 && (
-                <button type="button" className="wb-button text-xs py-1 px-2.5 text-emerald-700 hover:bg-emerald-50" title="以此数据发起兼职结算" onClick={() => onNavigatePayroll(record.cities[0])}>
-                  <Calculator size={13} className="inline mr-1" />兼职结算
-                </button>
-              )}
-</details>}
-              {record.available_files > 0 && <button type="button" className="wb-button" onClick={() => { open(record); setSummaryRecord(record.id); }}>查看核验摘要</button>}
-              <button type="button" className="wb-link wb-row" aria-expanded={expanded === record.id} onClick={() => { if (expanded === record.id) setExpanded(''); else open(record); }}>{expanded === record.id ? '收起详情' : '查看详情'}<ChevronDown size={14} /></button>
-            </div>
-          </div>
-          {expanded === record.id && <div className="wb-record-expanded" onClick={e => e.stopPropagation()}>
-            <VerificationSummary record={record} open={summaryRecord === record.id} />
-            {record.files.length ? <><h4 className="wb-section-label">结果文件</h4><div className="wb-row"><select className="wb-select" aria-label={`选择${record.cities.join('、')}领取城市`} value={bundleCity[record.id] || ''} onChange={event => setBundleCity(previous => ({ ...previous, [record.id]: event.target.value }))}><option value="">全部城市</option>{[...new Set(record.files.filter(file => file.available).map(file => file.city))].map(value => <option key={value}>{value}</option>)}</select><button className="wb-button" disabled={!!busy || !record.available_files} onClick={() => void download(record, undefined, bundleCity[record.id] || '')}>下载所选城市结果</button></div>
-              <div className="wb-record-file-list">{record.files.map(file => <div key={`${file.run_id}:${file.id}`} className="wb-row wb-space"><div className="wb-record-filename"><span>{file.name}</span><small className="wb-muted">{file.available ? `${file.city} · ${(file.bytes / 1024).toFixed(1)} KB` : file.unavailable_reason || '文件已不存在'}</small></div><button className="wb-button" disabled={!!busy || !file.available} aria-label={`下载文件 ${file.name}`} onClick={() => void download(record, file)}><Download size={14} />下载本文件</button></div>)}</div></> : <p className="wb-muted">本次记录尚无产出文件。</p>}
-            {record.incomplete_lineage && <p className="wb-notice">较早的来源记录缺失，本记录单独保留，未与其他下载合并。</p>}
-            {!!record.source_files?.length && <details className="wb-generation-sources"><summary>来源资料 · {record.source_files.length} 个文件</summary><div className="wb-record-file-list">{record.source_files.map(file => <div className="wb-row wb-space" key={`${file.run_id}:${file.id}`}><span className="wb-record-filename">{file.name}{!file.available && <small className="wb-muted">{file.unavailable_reason}</small>}</span><button className="wb-button" disabled={!!busy || !file.available} onClick={() => void download(record, file)}>下载来源</button></div>)}</div><button className="wb-button" disabled={!!busy || !record.source_files.some(file => file.available)} onClick={() => void download(record, undefined, '', true)}>打包来源资料</button></details>}
-            <details className="wb-record-attempts" open={record.member_ids.includes(selectedRunId)}><summary>处理记录{record.attempts.length > 1 ? ` · ${record.attempts.length} 次` : ''}</summary>
-              {record.attempts.length > 1 && <div className="wb-attempt-list">{record.attempts.map((attempt, index) => <button className="wb-button" key={attempt.id} aria-pressed={selectedRunId === attempt.id} onClick={() => open(record, attempt.id)}>{index === 0 ? '首次下载' : `后续处理 ${index}`} · {LABELS[attempt.status] || attempt.status}</button>)}</div>}
-              {record.member_ids.includes(selectedRunId) ? execution : <p className="wb-muted">正在读取执行明细…</p>}
-            </details>
-          </div>}
-        </article>)}
-      </div>
-      <aside className="wb-records-detail-pane" aria-label="任务巡检与产出驾驶舱">
-        <div className="wb-detail-cockpit-header">
-          <div className="flex items-center gap-2">
-            <Activity size={17} className="text-sky-600" />
-            <h4>任务巡检与详情分屏</h4>
-          </div>
-          <span className="wb-muted">共 {records.length} 条记录</span>
-        </div>
-        <div className="wb-preview-metrics">
-          <div><strong>{activeCount}</strong><span>进行中</span></div>
-          <div><strong>{attentionCount}</strong><span>待处理</span></div>
-          <div><strong>{completedCount}</strong><span>已完成</span></div>
-        </div>
-        {focusedRecord ? (
-          <div className="wb-detail-focused-body">
-            <div className="wb-detail-focused-title">
-              <div>
-                {recordSystemTags(focusedRecord).map(tag => <span key={tag} className={`wb-sys-badge mr-1.5 ${sysBadgeClass(tag)}`}>{tag}</span>)}
-                <span className="wb-kind-badge ml-0 mr-2">{focusedRecord.kind === 'payroll' ? '薪资核算' : focusedRecord.kind === 'generate' ? '业务表生成' : '资料下载'}</span>
-                <strong>{focusedRecord.kind === 'payroll' ? '兼职薪资核算批次' : focusedRecord.datasets.slice(0, 3).map(datasetLabel).join('、').replaceAll('（生成表）', '')}</strong>
-              </div>
-              <span className={focusedRecord.status === 'success' ? 'wb-success' : 'wb-muted'}>{LABELS[focusedRecord.status] || focusedRecord.status}</span>
-            </div>
-            <VerificationSummary record={focusedRecord} open={summaryRecord === focusedRecord.id} />
-            <dl className="wb-preview-dl">
-              <div><dt>数据来源</dt><dd>{recordSystemTags(focusedRecord).join(' + ')}</dd></div>
-              <div><dt>覆盖城市</dt><dd>{focusedRecord.cities.join('、') || '全部城市'}</dd></div>
-              <div><dt>业务周期</dt><dd className="font-mono">{focusedRecord.start} ~ {focusedRecord.end}</dd></div>
-              <div><dt>执行进度</dt><dd className="font-mono">已完成 {focusedRecord.completed_items}/{focusedRecord.total_items} 项{focusedRecord.failed_items ? `（异常 ${focusedRecord.failed_items} 项）` : ''}</dd></div>
-              <div><dt>可用产出</dt><dd className="font-mono">{focusedRecord.available_files} 个结果文件</dd></div>
-            </dl>
-
-            {/* 跨业务流水线联动 */}
-            {!focusedRecord.datasets.includes('baize_employees') && focusedRecord.cities?.length > 0 && (onNavigateGenerate || onNavigatePayroll) && (
-              <details className="wb-next-business p-3 mb-3 rounded-lg border border-sky-200"><summary>其他业务操作</summary>
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-900 mb-1">
-                  <span>⚡</span>
-                  <span>跨页面流水线联动</span>
-                </div>
-                <p className="text-[11px] text-slate-600 mb-2">
-                  自动将本次城市（{focusedRecord.cities.slice(0, 3).join('、')}{focusedRecord.cities.length > 3 ? `等${focusedRecord.cities.length}城` : ''}）与业务周期带入下游：
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {onNavigateGenerate && focusedRecord.kind !== 'generate' && (
-                    <button
-                      type="button"
-                      className="wb-button text-xs py-1.5 px-2.5 bg-white border-sky-300 text-sky-700 hover:bg-sky-50 font-medium inline-flex items-center gap-1 shadow-xs"
-                      onClick={() => onNavigateGenerate(focusedRecord.cities, focusedRecord.start, focusedRecord.end)}
-                    >
-                      <FileSpreadsheet size={13} />
-                      以此数据生成报表
-                    </button>
-                  )}
-                  {onNavigatePayroll && focusedRecord.kind !== 'payroll' && (
-                    <button
-                      type="button"
-                      className="wb-button text-xs py-1.5 px-2.5 bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50 font-medium inline-flex items-center gap-1 shadow-xs"
-                      onClick={() => onNavigatePayroll(focusedRecord.cities[0])}
-                    >
-                      <Calculator size={13} />
-                      以此数据发起兼职结算
-                    </button>
-                  )}
-                </div>
-              </details>
-            )}
-
-            {focusedRecord.kind === 'payroll' ? (
-              <div className="wb-detail-actions-box">
-                <p className="wb-muted">当前聚焦为兼职薪资核算批次（{focusedRecord.applicants || 0} 条申请记录）。</p>
-                <div className="wb-row mt-2">
-                  <button type="button" className="wb-button" onClick={() => { if (focusedRecord.batch_id) onOpenPayroll?.(focusedRecord.batch_id); }}>在核算台打开此批次</button>
-                </div>
-              </div>
-            ) : (() => {
-              const primaryDeliverables = focusedRecord.files.filter(f => f.name.endsWith('.xlsx') || f.name.endsWith('.xls'));
-              const otherFiles = focusedRecord.files.filter(f => !f.name.endsWith('.xlsx') && !f.name.endsWith('.xls'));
-              return (
-              <>
-                <div className="wb-detail-files-box">
-                  <div className="wb-row wb-space mb-2">
-                    <h5 className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800">
-                      <FileSpreadsheet size={14} className="text-emerald-600" />
-                      最终成品工作簿 ({primaryDeliverables.length})
-                    </h5>
-                    {focusedRecord.available_files > 0 && (
-                      <button type="button" className="wb-link text-xs" disabled={!!busy} onClick={() => void download(focusedRecord)}>
-                        <FolderArchive size={13} className="inline mr-1" />下载本批次全部结果 ({focusedRecord.available_files})
-                      </button>
-                    )}
-                  </div>
-                  {focusedRecord.files.length > 0 && (
-                    <div className="wb-row mb-2.5">
-                      <select
-                        className="wb-select ml-0 flex-1 text-xs py-1.5"
-                        aria-label={`分屏选择${focusedRecord.cities.join('、')}领取城市`}
-                        value={bundleCity[focusedRecord.id] || ''}
-                        onChange={event => setBundleCity(previous => ({ ...previous, [focusedRecord.id]: event.target.value }))}
-                      >
-                        <option value="">全部城市</option>
-                        {[...new Set(focusedRecord.files.filter(file => file.available).map(file => file.city))].map(value => <option key={value}>{value}</option>)}
-                      </select>
-                      <button type="button" className="wb-button text-xs py-1.5 px-3 min-h-[32px]" disabled={!!busy || !focusedRecord.available_files} onClick={() => void download(focusedRecord, undefined, bundleCity[focusedRecord.id] || '')}>下载所选城市结果</button>
-                    </div>
-                  )}
-                  {primaryDeliverables.length > 0 ? (
-                    <ul className="wb-detail-file-ul">
-                      {primaryDeliverables.map(file => (
-                        <li key={`${file.run_id}:${file.id}`} className="border-emerald-200 bg-emerald-50/40">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
-                              <span className="rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold px-1.5 py-0.5">.xlsx 成品</span>
-                              <p className="truncate font-medium text-slate-900">{file.name}</p>
-                            </div>
-                            <small className="wb-muted">{file.available ? `${file.city} · ${(file.bytes / 1024).toFixed(1)} KB` : file.unavailable_reason || '文件不可访问'}</small>
-                          </div>
-                          <button type="button" className="wb-primary text-xs py-1 px-2.5" disabled={!!busy || !file.available} onClick={() => void download(focusedRecord, file)}>
-                            <Download size={13} className="mr-1" />下载成品
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="wb-muted py-2 text-xs">当前批次暂无 .xlsx 成品工作簿。</p>
-                  )}
-
-                  {otherFiles.length > 0 && (
-                    <details className="wb-generation-sources mt-3">
-                      <summary className="cursor-pointer text-xs font-medium text-slate-600">中间与原始数据文件 ({otherFiles.length} 个)</summary>
-                      <ul className="wb-detail-file-ul mt-2">
-                        {otherFiles.map(file => (
-                          <li key={`${file.run_id}:${file.id}`}>
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate font-medium text-xs">{file.name}</p>
-                              <small className="wb-muted">{file.available ? `${file.city} · ${(file.bytes / 1024).toFixed(1)} KB` : file.unavailable_reason || '文件不可访问'}</small>
-                            </div>
-                            <button type="button" className="wb-button text-xs py-1" disabled={!!busy || !file.available} onClick={() => void download(focusedRecord, file)}>下载</button>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                </div>
-                {!!focusedRecord.source_files?.length && (
-                  <details className="wb-generation-sources">
-                    <summary>来源资料 · {focusedRecord.source_files.length} 个文件</summary>
-                    <ul className="wb-detail-file-ul mt-2">
-                      {focusedRecord.source_files.map(file => (
-                        <li key={`${file.run_id}:${file.id}`}>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate font-medium">{file.name}</p>
-                            {!file.available && <small className="wb-muted">{file.unavailable_reason}</small>}
-                          </div>
-                          <button type="button" className="wb-button" disabled={!!busy || !file.available} onClick={() => void download(focusedRecord, file)}>下载来源</button>
-                        </li>
-                      ))}
-                    </ul>
-                    <button type="button" className="wb-button mt-2 w-full" disabled={!!busy || !focusedRecord.source_files.some(file => file.available)} onClick={() => void download(focusedRecord, undefined, '', true)}>打包来源资料</button>
-                  </details>
-                )}
-                <details className="wb-record-attempts" open={focusedRecord.member_ids.includes(selectedRunId) || ACTIVE.has(focusedRecord.status) || focusedRecord.failed_items > 0 || focusedRecord.summary_issue}>
-                  <summary>执行明细与技术诊断{focusedRecord.attempts.length > 1 ? ` · ${focusedRecord.attempts.length} 次记录` : ''}</summary>
-                  {focusedRecord.attempts.length > 1 && (
-                    <div className="wb-attempt-list mt-2">
-                      {focusedRecord.attempts.map((attempt, index) => (
-                        <button type="button" className="wb-button text-xs" key={attempt.id} aria-pressed={selectedRunId === attempt.id} onClick={() => open(focusedRecord, attempt.id)}>
-                          {index === 0 ? '首次下载' : `后续处理 ${index}`} · {LABELS[attempt.status] || attempt.status}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <div className="mt-2">
-                    {focusedRecord.member_ids.includes(selectedRunId) ? execution : (
-                      <button type="button" className="wb-link text-xs" onClick={() => open(focusedRecord)}>加载此批次完整执行诊断与分项重试</button>
-                    )}
-                  </div>
-                </details>
-              </>
-              );
-            })()}
-          </div>
-        ) : (
-          <div className="wb-detail-empty">
-            <p className="wb-muted">新建或选中左侧任务记录后，此处将固定展示该批次的产出文件清单、分项执行状态与快捷打包入口。</p>
-          </div>
-        )}
-      </aside>
-    </div>
+  const download=(r:Task,file?:File,sources=false)=>act(async()=>{
+    let url:string,filename:string;
+    if(r.kind==='payroll'){url=`/api/fengshen-downloads/delivery-download?batch_id=${encodeURIComponent(r.batch_id||'')}`;filename='薪资核算结果.zip';}
+    else if(r.kind==='approval'){url=`/api/fengshen-downloads/lanorange-approvals/batches/${r.price_id}/result.csv`;filename='蓝橙价格审批回执.csv';}
+    else if(r.kind==='price-export'){url=`/api/fengshen-downloads/lanorange-prices/exports/${r.price_id}/result.xlsx`;filename='蓝橙待审每日价格.xlsx';}
+    else{url=file?`/api/fengshen-downloads/runs/${file.run_id}/files/${file.id}`:`/api/fengshen-downloads/records/${r.id}/bundle${sources?'?purpose=sources':''}`;filename=file?.name||`${sources?'来源':'结果'}_${r.id.slice(0,8)}.zip`;}
+    const response=await request(url);
+    const disposition=response.headers.get('content-disposition')||'';
+    const encoded=/filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    if(encoded){try{const actual=decodeURIComponent(encoded);if(actual&&!/[\\/\x00-\x1f]/.test(actual))filename=actual;}catch{}}
+    saveDownloadBlob(await readDownloadResponse(response,filename),filename);setNotice('已发起文件保存，请在浏览器下载记录中确认。');
+  });
+  const downloadResult=(r:Task)=>{const files=r.files.filter(f=>f.available);void download(r,files.length===1?files[0]:undefined);};
+  const showDirectory=(r?:Task)=>act(async()=>{const response=await request(`${API}/directory${r?`?record_id=${encodeURIComponent(r.id)}`:''}`);const info=await response.json();setDirectory({...info,record_id:r?.id});if(info.exists&&info.can_open)await request(`${API}/directory/open`,{record_id:r?.id});});
+  const changeVisibility=(rows:Task[])=>act(async()=>{
+    await request(`${API}/visibility`,{ids:rows.map(r=>r.id),restore:archived});setConfirm(null);setSelected([]);setFocused(null);setVersion(v=>v+1);
+    setNotice(archived?`已恢复 ${rows.length} 个任务，所有同事同步可见。`:`已移出 ${rows.length} 个任务，文件保留，可在“已移出”中恢复。`);
+  });
+  const chosen=records.filter(r=>selected.includes(r.id));
+  const canBatch=chosen.length>0&&chosen.length<=20&&chosen.every(r=>['download','generate','payroll_source'].includes(r.kind)&&r.available_files>0);
+  const needsAction=(r:Task)=>ACTIVE.has(r.status)||r.failed_items>0||r.summary_issue||['partial','error','interrupted','needs_review','waiting_materials','pending_download','ready'].includes(r.status);
+  const actionLabel=(r:Task)=>['waiting_login','waiting_manual'].includes(r.status)?'完成验证':ACTIVE.has(r.status)?'查看进度':r.status==='needs_review'?'核实结果':'处理异常';
+  const files=(r:Task,list:File[])=> <ul className="tc-files">{list.map(f=><li key={`${f.run_id}:${f.id}`}><div><span>{f.name}</span><small>{f.city} · {f.available?size(f.bytes):f.unavailable_reason||'文件不可用'}</small></div><button className="wb-button" disabled={busy||!f.available} onClick={()=>void download(r,f)}><Download size={14}/>下载</button></li>)}</ul>;
+  const openPayroll=(r:Task)=>{setFocused(null);onOpenPayroll?.(r.batch_id!);};
+  const openPrice=(r:Task)=>{setFocused(null);onOpenPrice?.(r.kind as 'approval'|'price-export');};
+  const mainAction=(r:Task)=>r.kind==='payroll'?openPayroll(r):r.price_id?openPrice(r):open(r);
+  return <section className="tc-center" aria-label="任务中心列表">
+    <div className="tc-heading"><div><h2>任务中心</h2><p>查找任务、领取文件和处理异常</p></div><div className="tc-detail-actions">{!archived&&<button className="wb-button" disabled={busy} onClick={()=>void act(async()=>{const params=new URLSearchParams({q:query,system,kind,from,to,module:recordModule||''});const response=await request(`${API}/organize-preview?${params}`);const data=await response.json();if(data.records.length)setConfirm(data.records);else setNotice('当前筛选范围内没有可整理的已完成任务。');})}>整理已完成</button>}<button className="wb-button" disabled={busy} onClick={()=>void showDirectory()}><FolderOpen size={16}/>打开生成根目录</button></div></div>
+    <div className="tc-toolbar"><div className="wb-quick-filters" role="group" aria-label="任务状态">{[['','全部','all'],['active','进行中','active'],['attention','待处理','attention'],['success','已完成','success']].map(([key,label,count])=><button key={key} aria-pressed={status===key} onClick={()=>{setStatus(key);reset();}}>{label}<span className="tc-count">{counts[count]||0}</span></button>)}</div><button className={`wb-button ${archived?'tc-archive-active':''}`} onClick={()=>{setArchived(!archived);reset();}}><Archive size={15}/>{archived?'返回任务列表':'已移出'}</button></div>
+    <div className="tc-searchbar"><label className="tc-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索任务、城市、文件名或编号" aria-label="搜索任务"/></label>
+      {!recordModule&&<><select className="wb-select" aria-label="筛选平台" value={system} onChange={e=>{setSystem(e.target.value);reset();}}><option value="">全部平台</option>{Object.entries(SYSTEMS).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select><select className="wb-select" aria-label="筛选任务类型" value={kind} onChange={e=>{setKind(e.target.value);reset();}}><option value="">全部类型</option>{Object.entries(KINDS).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></>}
+      <details className="tc-filters"><summary className="wb-button">日期筛选{from||to?' · 已启用':''}</summary><div><label>创建日期从<input className="wb-input" type="date" value={from} onChange={e=>{setFrom(e.target.value);reset();}}/></label><label>至<input className="wb-input" type="date" value={to} onChange={e=>{setTo(e.target.value);reset();}}/></label><button className="wb-link" onClick={()=>{setFrom('');setTo('');reset();}}>清除日期</button></div></details><button className="wb-icon" aria-label="刷新任务列表" onClick={()=>setVersion(v=>v+1)}><RefreshCw size={17}/></button></div>
+    {archived&&<p className="tc-info">已移出的任务仍保留文件和处理记录，恢复后所有同事同步可见。</p>}
+    {pollError&&<p role="status" className="wb-notice">{pollError}；正在自动重试，现有记录保留。</p>}{error&&<p role="alert" className="wb-error">{error}</p>}{notice&&<p role="status" className="tc-info">{notice}</p>}
+    {!!selected.length&&<div className="tc-batchbar"><strong>已选 {selected.length} 项（当前页）</strong><button className="wb-button" disabled={busy||!canBatch} title="最多20个有文件的资料或报表任务" onClick={()=>void act(async()=>{const response=await request(`${API}/bundle`,{ids:selected});saveDownloadBlob(await readDownloadResponse(response,'批量任务结果.zip'),'批量任务结果.zip');setNotice('已发起批量文件保存。');})}><Download size={15}/>批量下载</button><button className="wb-button" disabled={busy||!chosen.length||(!archived&&chosen.some(r=>!ENDED.has(r.status)))} onClick={()=>setConfirm(chosen)}>{archived?'恢复显示':'移出列表'}</button><button className="wb-link" onClick={()=>setSelected([])}>取消选择</button></div>}
+    <div className="tc-table-scroll"><table className="tc-table"><thead><tr><th><input type="checkbox" aria-label="选择当前页任务" checked={records.length>0&&records.every(r=>selected.includes(r.id))} onChange={e=>setSelected(e.target.checked?records.map(r=>r.id):[])}/></th><th>任务内容</th><th>范围 / 账期</th><th>创建时间</th><th>状态</th><th>操作</th></tr></thead><tbody>{records.map(r=><React.Fragment key={r.id}><tr data-task-ids={r.member_ids.join(' ')}><td><input type="checkbox" aria-label={`选择${title(r)}`} checked={selected.includes(r.id)} onChange={e=>setSelected(v=>e.target.checked?[...v,r.id]:v.filter(id=>id!==r.id))}/></td><td className="tc-title"><button onClick={()=>open(r)} title={title(r)}>{title(r)}</button><small>{platform(r)} · {KINDS[r.kind]||'资料下载'} · {r.id.slice(-6).toUpperCase()}</small></td><td className="tc-scope"><span title={r.cities.join('、')}>{r.cities.length>2?`${r.cities.slice(0,2).join('、')}等${r.cities.length}城`:r.cities.join('、')}</span><small>{scope(r)}</small></td><td className="tc-time">{stamp(r.created_at)}</td><td><span className={`tc-status is-${r.status}`}>{LABELS[r.status]||r.status}</span><small>{r.files.length&&!r.available_files?'文件不可用':r.available_files?`${r.available_files} 个文件`:ACTIVE.has(r.status)?`${r.completed_items}/${r.total_items} 项`:''}</small></td><td><div className="tc-actions">{needsAction(r)?<button className="wb-primary" onClick={()=>mainAction(r)}>{actionLabel(r)}</button>:r.available_files>0?<button className="wb-primary" disabled={busy} onClick={()=>downloadResult(r)}>下载结果</button>:null}{r.files.length>1&&<button className="wb-link" aria-expanded={filesOpen===r.id} onClick={()=>setFilesOpen(filesOpen===r.id?'':r.id)}>文件<ChevronDown size={13}/></button>}<button className="wb-link" onClick={()=>open(r)}>详情</button></div></td></tr>{filesOpen===r.id&&<tr className="tc-file-row"><td/><td colSpan={5}>{r.failed_items>0&&<p className="wb-notice">另有 {r.failed_items} 项未完成，已有文件可先领取。</p>}{files(r,r.files)}</td></tr>}</React.Fragment>)}</tbody></table></div>
+    {!records.length&&<div className="tc-empty">{loading?'正在读取任务…':pollError?'暂时无法读取，请刷新重试。':archived?'暂无已移出的任务。':'没有符合条件的任务。'}</div>}
+    <footer className="tc-pagination"><span>共 {total} 条 · 每页 20 条</span><div><button className="wb-button" disabled={page<=1||loading} onClick={()=>{setPage(p=>p-1);setSelected([]);}}>上一页</button><span>{page} / {pages}</span><button className="wb-button" disabled={page>=pages||loading} onClick={()=>{setPage(p=>p+1);setSelected([]);}}>下一页</button></div></footer>
+    {focused&&<WorkbenchDrawer title="任务详情" wide onClose={()=>setFocused(null)} bodyClassName="tc-detail"><div className="tc-detail-title"><h3>{title(focused)}</h3><span className={`tc-status is-${focused.status}`}>{LABELS[focused.status]||focused.status}</span></div><p className="wb-muted">{platform(focused)} · {focused.cities.join('、')} · {scope(focused)}</p><p className="wb-muted">{stamp(focused.created_at)} · 编号 {focused.id.slice(-8).toUpperCase()}</p>
+      <div className="tc-detail-actions">{focused.available_files>0&&<button className="wb-primary" disabled={busy} onClick={()=>downloadResult(focused)}>下载结果</button>}{<button className="wb-button" disabled={busy} onClick={()=>void showDirectory(focused)}><FolderOpen size={15}/>打开任务目录</button>}{(archived||ENDED.has(focused.status))&&<button className="wb-button" disabled={busy} onClick={()=>setConfirm([focused])}>{archived?'恢复显示':'移出列表'}</button>}</div>
+      {error&&<p role="alert" className="wb-error">{error}</p>}
+      {!!focused.files.length&&<section><h4>结果文件（{focused.available_files} 个可用）</h4>{focused.failed_items>0&&<p className="wb-notice">部分资料未完成，已生成文件可先领取；压缩包内附缺失说明。</p>}{files(focused,focused.files)}</section>}
+      {focused.kind==='payroll'&&<button className="wb-button" onClick={()=>openPayroll(focused)}>打开核算批次</button>}{focused.price_id&&<button className="wb-button" onClick={()=>openPrice(focused)}>查看{focused.kind==='approval'?'审批':'价格导出'}记录</button>}
+      {['download','generate','payroll_source'].includes(focused.kind)&&ENDED.has(focused.status)&&<details><summary>复核资料</summary><p className="wb-muted">领取来源原件，文件平铺并附来源清单；相同原件只保留一份。</p><button className="wb-button" disabled={busy} onClick={()=>void download(focused,undefined,true)}>下载复核资料包</button>{!!focused.source_files?.length&&<details><summary>关联资料（{focused.source_files.length}）</summary>{files(focused,focused.source_files)}</details>}</details>}
+      {focused.action_run_id&&<details key={focused.id} open={needsAction(focused)} className="tc-execution"><summary>{needsAction(focused)?'进度与异常处理':'处理记录与核验信息'}</summary><div className="tc-attempts">{focused.attempts.length>1&&focused.attempts.map((a,i)=><button key={a.id} className="wb-button" aria-pressed={selectedRunId===a.id} onClick={()=>{onOpenAttempt(a.id);}}>{i?'后续处理':'首次下载'} · {LABELS[a.status]||a.status}</button>)}</div>{focused.member_ids.includes(selectedRunId)?execution:<button className="wb-link" onClick={()=>open(focused)}>加载处理记录</button>}</details>}
+      {focused.status==='success'&&!focused.datasets.includes('baize_employees')&&!focused.price_id&&focused.kind!=='payroll'&&<details><summary>更多业务操作</summary><div className="tc-detail-actions">{onNavigateGenerate&&focused.kind!=='generate'&&<button className="wb-button" onClick={()=>{setFocused(null);onNavigateGenerate(focused.cities,focused.start,focused.end);}}>生成报表</button>}{onNavigatePayroll&&<button className="wb-button" onClick={()=>{setFocused(null);onNavigatePayroll(focused.cities[0]);}}>兼职核算</button>}</div></details>}
+    </WorkbenchDrawer>}
+    {directory&&<WorkbenchDrawer title="生成文件目录" onClose={()=>setDirectory(null)}><p className="wb-muted">这是运行本系统的电脑上的目录，浏览器下载位置由浏览器设置决定。</p><label className="tc-path">{directory.record_id?'本次任务目录':'生成根目录'}<textarea readOnly value={directory.path} onFocus={e=>e.target.select()}/></label>{!directory.exists&&<p className="wb-notice">目录尚未生成或已被移动。</p>}<div className="tc-detail-actions"><button className="wb-primary" disabled={busy||!directory.exists||!directory.can_open} onClick={()=>void act(async()=>{await request(`${API}/directory/open`,{record_id:directory.record_id});setNotice('已打开资源管理器。');})}><FolderOpen size={16}/>打开文件夹</button><button className="wb-button" onClick={()=>void act(async()=>{await navigator.clipboard.writeText(directory.path);setNotice('目录路径已复制。');})}>复制路径</button></div>{!directory.can_open&&<p className="wb-muted">远程访问请下载文件，或使用管理员提供的共享路径。</p>}{error&&<p className="wb-error" role="alert">{error}</p>}<details><summary>新任务目录结构</summary><pre className="tc-tree">{'任务名称_生成时间_编号 /\n  汇总报表.xlsx\n  城市_报表.xlsx\n  文件清单.csv\n\n成品直接平铺；原始资料单独保留，需要时领取复核资料包。'}</pre></details></WorkbenchDrawer>}
+    {confirm&&<WorkbenchDrawer title={archived?'恢复任务显示':'移出任务列表'} onClose={()=>setConfirm(null)}><p>将{archived?'恢复':'移出'} {confirm.length} 个任务，对共享工作台所有同事生效。</p><p className="wb-muted">文件、处理记录和业务资料均保留。{archived?'':'之后可在“已移出”中恢复。'}</p><ul className="tc-confirm-list">{confirm.slice(0,30).map(r=><li key={r.id}>{title(r)} · {r.id.slice(-6).toUpperCase()}</li>)}</ul>{error&&<p className="wb-error" role="alert">{error}</p>}<div className="tc-detail-actions"><button className="wb-button" onClick={()=>setConfirm(null)}>取消</button><button className="wb-primary" disabled={busy} onClick={()=>void changeVisibility(confirm)}>{busy?'处理中…':archived?'确认恢复':'确认移出，保留文件'}</button></div></WorkbenchDrawer>}
   </section>;
 }
-
-function VerificationSummary({record, open}: {record: DownloadRecord; open: boolean}) {
-  return <details className="wb-verification-summary" open={open}><summary>核验摘要 · 本批次</summary>
-    <p>范围：{record.cities.join('、')} · {record.start} 至 {record.end}</p>
-    <p>可领取成品 {record.available_files} 个 · 不可访问文件 {record.files.filter(file=>!file.available).length} 个 · 未完成资料 {record.failed_items} 项</p>
-    <p>任务编号：{record.id.slice(0,8).toUpperCase()} · 处理记录 {record.attempts.length} 次</p>
-    <p className="wb-muted">这是任务与文件状态摘要，不代表正式工资已获人工确认；来源资料、原始版本及日志在次级区域。</p>
-  </details>;
-}
-
-function PayrollTaskCard({ record, focused, workspaceId, onFocus, onOpen }: {record: DownloadRecord; focused?: boolean; workspaceId: string; onFocus?: () => void; onOpen: () => void}) {
-  const [downloading, setDownloading] = useState(false);
-  const [downloadError, setDownloadError] = useState('');
-  const downloadBusy = useRef(false);
-  const downloadResult = async () => {
-    if (!record.output || downloadBusy.current) return;
-    downloadBusy.current = true; setDownloading(true); setDownloadError('');
-    try { await downloadOutput(`/api/download?path=${encodeURIComponent(record.output)}&workspace_id=${encodeURIComponent(workspaceId)}`, workspaceId, '核算结果.zip'); }
-    catch (error) { setDownloadError(error instanceof Error ? error.message : '下载失败，请重试'); }
-    finally { downloadBusy.current = false; setDownloading(false); }
-  };
-  const link = new URL(window.location.href); link.searchParams.set('workspace', workspaceId); link.searchParams.set('batch', record.batch_id || '');
-  return <article className={`wb-card wb-record ${focused ? 'is-focused' : ''}`} aria-label={`${record.cities.join('、')}核算任务`} onClick={onFocus}>
-    <div className="wb-record-summary">
-      <div className="wb-record-description"><h3><span className="wb-sys-badge mr-1.5 is-fengshen">风神</span><span className="wb-sys-badge mr-1.5 is-lanorange">蓝橙</span>兼职薪资核算<span className="wb-kind-badge">核算</span></h3><p className="wb-muted">{record.cities.join('、')} · {record.start} 至 {record.end}</p><p className="wb-muted">{record.created_at ? timestamp(record.created_at) : ''} · {record.applicants || 0} 条申请 · 资料 {record.completed_items}/{record.total_items} 项已处理</p>
-      {record.status === 'success' && !record.available_files && <p className="wb-muted">结果文件暂不可访问，批次记录保留。</p>}</div>
-      <span className={`wb-record-status ${record.status === 'success' ? 'wb-success' : 'wb-muted'}`}>{record.status === 'success' ? '已生成 · 待复核' : LABELS[record.status] || record.status}</span>
-      <div className="wb-row wb-record-actions" onClick={e => e.stopPropagation()}>
-        {record.available_files > 0 && record.output ? <><button type="button" className="wb-primary" disabled={downloading} onClick={() => void downloadResult()}><Download size={15} />{downloading ? '下载中…' : '下载结果'}</button><button type="button" className="wb-link" onClick={onOpen}>查看详情</button></> : <button type="button" className="wb-primary" onClick={onOpen}>{record.status === 'ready' ? '打开批次' : record.status === 'pending_download' ? '准备资料' : record.status === 'waiting_materials' ? '处理资料缺项' : ACTIVE.has(record.status) ? '查看进度' : '查看核算资料'}</button>}
-      </div>
-    </div>
-    {downloadError && <div role="alert" className="wb-notice"><p>{downloadError}</p><button type="button" className="wb-button mt-2" onClick={onOpen}>打开批次查看结果文件</button></div>}
-    <details className="wb-generation-sources" onClick={e => e.stopPropagation()}><summary>在手机继续此任务</summary><p className="wb-muted">在同一 Wi-Fi 的手机上打开此链接，可恢复相同工作区和批次。</p><input className="wb-input w-full" aria-label="手机继续核算链接" readOnly value={link.href} onFocus={event => event.target.select()} /></details>
-  </article>;
-}
-

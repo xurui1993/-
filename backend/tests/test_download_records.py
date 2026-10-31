@@ -95,7 +95,7 @@ class StorageTests(unittest.TestCase):
                 update_item({**file, 'status': 'success'})
                 files.append(file)
             return files
-        self.manager = jobs.DownloadManager(self.root / 'db/tasks.sqlite3', self.root / 'outputs', executor)
+        self.manager = jobs.DownloadManager(self.root / 'db/tasks.sqlite3', self.root / 'outputs', executor, flat_delivery=False)
         self.addCleanup(self.manager.shutdown)
 
     def create(self, owner='tester', kinds=('delivery_fee',)):
@@ -128,10 +128,33 @@ class StorageTests(unittest.TestCase):
         with zipfile.ZipFile(target) as archive:
             receipt = json.loads(archive.read('下载说明.json'))
             self.assertEqual(len(receipt['files']), 2)
-            self.assertEqual(len([name for name in archive.namelist() if name.endswith('.csv')]), 2)
+            self.assertEqual(len([name for name in archive.namelist() if name.endswith('.csv') and name != '任务清单.csv']), 2)
+            self.assertIn('任务清单.csv', archive.namelist())
+            self.assertTrue(any(name.startswith('结果/泉州/') for name in archive.namelist()))
         self.assertNotIn('relative_path', json.dumps(record))
         self.assertNotIn('sha256', json.dumps(record))
 
+    def test_task_center_bulk_download_and_directory_use_existing_verified_files(self):
+        import task_center as center
+        from test_task_center import request as center_request
+        first=self.create(kinds=('delivery_fee',))
+        second=self.create(kinds=('penalty',))
+        with patch.object(jobs,'get_manager',return_value=self.manager),patch.object(center,'collect',return_value=(records.list_records(self.manager,'tester'),[])):
+            response=center.batch_bundle({'ids':[first['id'],second['id']]},center_request('POST'))
+            with zipfile.ZipFile(response.path) as archive:
+                self.assertEqual(len(archive.namelist()),2)
+                for name in archive.namelist():
+                    import io
+                    with zipfile.ZipFile(io.BytesIO(archive.read(name))) as nested:
+                        self.assertIn('任务清单.csv',nested.namelist())
+                        self.assertTrue(any(value.startswith('结果/泉州/') for value in nested.namelist()))
+            folder=center.directory(center_request(),first['id'])
+            self.assertEqual(folder.parent,self.manager.output_root)
+            self.assertTrue((folder/'文件清单.csv').is_file())
+            self.assertFalse(any(path.is_dir() for path in folder.iterdir()))
+            asyncio.run(response.background())
+            self.assertFalse(Path(response.path).exists())
+            self.assertEqual(self.manager.get_run('tester',first['id'])['status'],'success')
     def test_missing_files_keep_records_and_available_files_can_still_be_downloaded(self):
         value = self.create(kinds=('delivery_fee', 'penalty'))
         path, _ = self.manager.get_file('tester', value['id'], value['files'][0]['id'])

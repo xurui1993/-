@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import datetime as dt
 import json
 from pathlib import Path
@@ -137,6 +138,32 @@ class DownloadServiceTests(unittest.TestCase):
         files = service.execute_downloads({**config, "owner": "test"}, self.root / "run", logs.append,
             threading.Event(), updates.append, runner_factory=lambda *args: contextlib.nullcontext(self.runner))
         return files, updates, logs
+
+    def test_new_result_layout_keeps_deliverables_under_city_directory(self):
+        config = self.config(['delivery_fee'])
+        files, _, _ = self.execute({**config, 'result_layout': 2})
+        self.assertTrue(files)
+        for file in files:
+            relative = Path(file['relative_path'])
+            self.assertEqual(relative.parts[:2], ('结果', '泉州'))
+            output = self.root / 'run' / relative
+            self.assertTrue(output.is_file())
+            self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), file['sha256'])
+
+    def test_flat_layout_moves_generated_artifact_and_retains_platform_sources(self):
+        sources=Mock();sources.employees.return_value=Path('employees.xlsx');sources.proxies.return_value=Path('proxies.xlsx')
+        config=self.config(['payment_binding'],start='2026-09-01',end='2026-09-30')
+        config['result_layout']=3
+        generated=[]
+        def generate(paths,employees,proxies,plan,raw,log,cancelled):
+            path=Path(raw)/'generated.xlsx';path.write_bytes(b'generated fixture');generated.append(path);return path,{}
+        with patch('binding_sources_http.BindingSources',return_value=sources),patch('binding_download.generate_binding',side_effect=generate):
+            files,_,_=self.execute(config)
+        self.assertEqual(len(files),1)
+        final=self.root/'run'/files[0]['relative_path']
+        self.assertEqual(final.read_bytes(),b'generated fixture')
+        self.assertFalse(generated[0].exists())
+        self.assertTrue(any((self.root/'run/原始资料').rglob('rider_detail.csv')))
 
     def test_all_covered_months_include_cross_year_and_leap_february(self):
         value = service.validate_request(dict(cities=["泉州"], datasets=["rider_monthly"],

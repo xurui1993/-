@@ -104,7 +104,7 @@ class ManagerTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def manager(self, executor):
-        manager = DownloadManager(self.root / "db" / "tasks.sqlite3", self.root / "outputs", executor)
+        manager = DownloadManager(self.root / "db" / "tasks.sqlite3", self.root / "outputs", executor, flat_delivery=False)
         self.managers.append(manager)
         return manager
 
@@ -468,7 +468,7 @@ class ManagerTests(unittest.TestCase):
             created = manager.create("tester", CONFIG)
         run = self.wait_run(manager, created["id"])
         self.assertEqual(run["created_at"], "2026-09-30T16:01:02+00:00")
-        self.assertEqual(run["archive_relative_dir"], "2026-10/20261001_000102_泉州_" + run["id"][:6].upper())
+        self.assertEqual(run["archive_relative_dir"], "2026-10/20261001_000102_风神_配送费_泉州_" + run["id"][:6].upper())
         self.assertEqual(run["archive_code"], run["id"][:6].upper())
         self.assertEqual(run["archive_version"], 1)
         directory = manager._run_directory("tester", run["id"])
@@ -486,12 +486,13 @@ class ManagerTests(unittest.TestCase):
         manager._queue.join()
         original_path, _ = manager.get_file("tester", old["id"], old["files"][0]["id"])
         manager.shutdown()
-        changed = DownloadManager(manager.db_path, self.root / "changed_root", self.success_executor)
+        changed = DownloadManager(manager.db_path, self.root / "changed_root", self.success_executor, flat_delivery=False)
         self.managers.append(changed)
         restored_path, _ = changed.get_file("tester", old["id"], old["files"][0]["id"])
         self.assertEqual(restored_path, original_path)
         summary, _ = changed.get_summary("tester", old["id"])
-        self.assertEqual(summary.parent, original_path.parent)
+        self.assertEqual(summary.parent, original_path.parents[2])
+        self.assertTrue((summary.parent / '任务清单.csv').is_file())
         new = self.wait_run(changed, changed.create("tester", CONFIG)["id"])
         new_path, _ = changed.get_file("tester", new["id"], new["files"][0]["id"])
         self.assertTrue(new_path.is_relative_to(changed.output_root))
@@ -511,10 +512,13 @@ class ManagerTests(unittest.TestCase):
             state = json.loads(connection.execute("SELECT state_json FROM download_runs WHERE id=?", (old["id"],)).fetchone()[0])
             for key in ("archive_version", "archive_relative_dir", "archive_code", "_archive_root"):
                 state.pop(key)
+            state.pop('archive_label', None)
+            state.pop('result_layout', None)
+            state['files'][0]['relative_path'] = 'result.csv'
             connection.execute("UPDATE download_runs SET state_json=? WHERE id=?", (json.dumps(state), old["id"]))
         manager.shutdown()
         with patch.object(jobs, "ROOT", legacy_project):
-            changed = DownloadManager(manager.db_path, self.root / "new_location", Mock())
+            changed = DownloadManager(manager.db_path, self.root / "new_location", Mock(), flat_delivery=False)
             self.managers.append(changed)
             path, name = changed.get_file("tester", old["id"], old["files"][0]["id"])
             self.assertEqual((path, name), (legacy_file, "result.csv"))
@@ -543,7 +547,7 @@ class ManagerTests(unittest.TestCase):
             return [file]
         executor = Mock(side_effect=recovered)
         with patch.object(jobs, "ROOT", legacy_project):
-            changed = DownloadManager(manager.db_path, self.root / "recovered_root", executor)
+            changed = DownloadManager(manager.db_path, self.root / "recovered_root", executor, flat_delivery=False)
             self.managers.append(changed)
             recovered_job = changed.recover_detail("tester", old["id"])
             result = self.wait_run(changed, recovered_job["id"])
@@ -652,7 +656,7 @@ class ManagerTests(unittest.TestCase):
             release.wait(3)
             return self.success_executor(config, run_dir, log, cancelled, update_item)
         manager = self.manager(execute)
-        old_dir = manager.output_root / archive_relative_dir(old_id, stamp, CONFIG["cities"])
+        old_dir = manager.output_root / archive_relative_dir(old_id, stamp, CONFIG["cities"], jobs.task_archive_label(CONFIG['datasets']))
         old_dir.mkdir(parents=True)
         (old_dir / ".archive_task.json").write_text(json.dumps({"id": old_id, "version": 1}), encoding="utf-8")
         protected = old_dir / "下载说明.txt"

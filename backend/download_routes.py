@@ -18,6 +18,32 @@ from download_jobs import (DownloadManagerClosed, DownloadNotFound, DownloadResu
 router = APIRouter(prefix="/api/fengshen-downloads")
 
 
+@router.get('/delivery-download')
+def payroll_delivery_download(request: Request, batch_id: str='', path: str=''):
+    """Only a current workspace's registered payroll delivery, never arbitrary paths."""
+    from pathlib import Path
+    from payroll_inputs import load, workspace, publish_result, delivery_store
+    from delivery_store import delivery_bundle
+    from parttime_source import ROOT, SourceError
+    user=require_account(request);wid=workspace(request)
+    if not batch_id:
+        for manifest in (Path(ROOT)/'uploads'/wid).glob('payroll_*/manifest.json'):
+            import json
+            try:
+                state=json.loads(manifest.read_text(encoding='utf-8'))
+                if path and Path(state.get('result',{}).get('output') or '').resolve()==Path(path).resolve():
+                    batch_id=state['id'];break
+            except (OSError,ValueError,KeyError):continue
+    try:
+        folder,state=load(wid,batch_id,user['owner'])
+        if state['status']!='calculated':raise SourceError('核算尚未完成')
+        publish_result(wid,folder,state)
+        file,name=delivery_bundle(delivery_store(),'payroll:'+wid+':'+batch_id)
+    except (SourceError,OSError,ValueError):
+        raise HTTPException(404,'本工作区核算结果不存在或校验失败') from None
+    return FileResponse(file,filename=name,media_type='application/zip',background=BackgroundTask(file.unlink,missing_ok=True))
+
+
 def workspace_owner(request):
     try:
         owner = unquote(request.headers.get("x-workspace-id", ""), errors="strict")
@@ -196,6 +222,12 @@ async def retry(run_id: str, request: Request):
 @router.get("/runs/{run_id}/files/{file_id}")
 def file(run_id: str, file_id: str, request: Request):
     user, owner = _authorized(request, run_id)
+    manager=get_manager()
+    run=_call(lambda:manager.get_run(owner,run_id))
+    if run.get('result_layout')==3 and run['status'] in ('success','partial','error','cancelled','interrupted'):
+        try:_call(lambda:manager.publish_delivery(owner,run_id))
+        except HTTPException as error:
+            if error.status_code!=404:raise
     path, filename = _call(lambda: get_manager().get_file(owner, run_id, file_id))
     audit_event(user, "download.file", run_id)
     return FileResponse(path, filename=filename, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})

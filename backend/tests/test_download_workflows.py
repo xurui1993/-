@@ -52,7 +52,8 @@ class DownloadWorkflowTests(unittest.TestCase):
         while time.monotonic() < limit:
             result = manager.get_run(owner, identity)
             if result["status"] in FINAL_STATUSES:
-                return result
+                if result['files']:manager.publish_delivery(owner,identity)
+                return manager.get_run(owner,identity)
             threading.Event().wait(0.01)
         self.fail("synthetic job did not finish")
 
@@ -83,8 +84,8 @@ class DownloadWorkflowTests(unittest.TestCase):
         self.assertEqual(path.read_text(encoding="utf-8"), "synthetic,data\n")
         bundle, _ = manager.get_bundle("tester", identity)
         with zipfile.ZipFile(bundle) as archive:
-            self.assertEqual(set(archive.namelist()), {"下载说明.txt", "result.csv"})
-            self.assertIn("执行中", archive.read("下载说明.txt").decode("utf-8-sig"))
+            self.assertEqual(set(archive.namelist()), {"文件清单.csv", "result.csv"})
+            self.assertIn("running", archive.read("文件清单.csv").decode("utf-8-sig"))
         bundle.unlink()
         release.set()
         finished = self.wait(manager, identity)
@@ -342,7 +343,7 @@ class DownloadWorkflowTests(unittest.TestCase):
         path.write_bytes(b"x" * path.stat().st_size)
         with self.assertRaises(DownloadNotFound):
             manager.get_bundle("tester", run["id"])
-        self.assertEqual(list((manager.db_path.parent / "bundles").iterdir()), [])
+        self.assertEqual(list(manager.db_path.parent.glob('bundles/*.zip')), [])
 
     def test_root_protection_retains_historical_locations_and_rejects_corrupt_registry(self):
         manager = self.manager(self.success)
