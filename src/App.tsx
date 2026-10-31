@@ -12,7 +12,7 @@ import type { RunResult } from './components/RunResultCard';
 import { restorePayrollSourceMode } from './payrollSource';
 import { FengshenDownloadCenter } from "./components/FengshenDownloadCenter";
 import * as XLSX from "xlsx";
-import { getWorkspaceId, loadConfigExcelData } from "./utils";
+import { getWorkspaceId } from "./utils";
 import { WorkbenchDrawer } from "./components/WorkbenchDrawer";
 import { SystemConnections } from "./components/SystemConnections";
 import { HeaderDownloadCenter } from "./components/HeaderDownloadCenter";
@@ -24,6 +24,7 @@ import { initialTaskKind, TASK_KIND_LABELS, type TaskKind } from "./lib/taskCata
 import { getHeaderModuleContext, getPayrollSidebarBadge } from "./lib/workbench";
 import { DOWNLOAD_PLATFORMS,type DownloadPlatform } from './lib/downloadModules';
 import "./workbench.css";
+import "./workbench-unified.css";
 
 const showDesktopNotification = (title: string, body: string) => {
   if (!("Notification" in window)) {
@@ -152,6 +153,7 @@ export default function App() {
   const platformNavLabel=platformMeta.navLabel;
   const [approvalActiveCount,setApprovalActiveCount]=useState(0);
   const [priceExportActiveCount,setPriceExportActiveCount]=useState(0);
+  const [priceRecordId,setPriceRecordId]=useState<string|undefined>();
   useEffect(()=>{
     let disposed=false;const controller=new AbortController();
     const read=()=>Promise.all([['lanorange-approvals',setApprovalActiveCount],['lanorange-prices',setPriceExportActiveCount]].map(([path,setter])=>fetchWithAuth(`/api/fengshen-downloads/${path}/activity`,{signal:controller.signal}).then(r=>r.ok?r.json():null).then(value=>{if(!disposed && value)(setter as (count:number)=>void)(value.active?1:0);}).catch(()=>{})));
@@ -276,7 +278,7 @@ export default function App() {
     setTaskKind('generate');
     navigateWorkspace('create');
     setDownloadPrefill({ cities, start, end, taskKind: 'generate', token: Date.now() });
-    showToast(`已转入业务报表生成（已预选 ${cities.length} 个城市及对应周期）`, 'info');
+    showToast(cities.length ? `已带入 ${cities.length} 个城市，请确认报表与时间范围` : '请选择报表、城市与时间范围', 'info');
   };
 
   const handleNavigatePayroll = (city?: string) => {
@@ -388,28 +390,27 @@ export default function App() {
     return defaultState;
   });
 
+  const [directoryCities,setDirectoryCities]=useState<string[]>([]);
+  const [directoryMessage,setDirectoryMessage]=useState('');
   useEffect(() => {
-    // Load cities from backend which reads config.json
-    const configPath = appConfig.sourcePath && appConfig.sourcePath !== "./data" && appConfig.sourcePath !== "./uploads" ? appConfig.sourcePath + "/config.json" : undefined;
-    
-    loadConfigExcelData(configPath)
-    .then(data => {
-      if (data && data.success && data.data && data.data.cities) {
-        const newCities = Object.keys(data.data.cities);
-        if (newCities.length > 0) {
-          setAppConfig(prev => {
-            if (JSON.stringify(prev.cities) !== JSON.stringify(newCities)) {
-              return { ...prev, cities: newCities };
-            }
-            return prev;
-          });
-        }
-      }
-    })
-    .catch(err => {
-      console.error("Failed to load cities from config.json API", err);
-    });
-  }, [appConfig.sourcePath]);
+    const controller=new AbortController();
+    let sequence=0;
+    const accept=(data:any)=>{
+      if(controller.signal.aborted || !Array.isArray(data.cities))return;
+      setDirectoryCities([...new Set<string>(data.cities.map((c:any)=>c.name).filter((name:any)=>typeof name==='string'))]);
+      setDirectoryMessage(data.cities_source==='config'?'当前为本机城市缓存，平台授权范围待刷新确认':'城市来自平台目录；历史归属仍可核对');
+    };
+    setDirectoryCities([]);
+    const lighthouse=appConfig.payrollSourceMode==='xiaoxiang';
+    const update=(event:Event)=>{if(!lighthouse){sequence++;accept((event as CustomEvent).detail);}};
+    const read=(refresh=false)=>{const request=++sequence;void fetchWithAuth(lighthouse?`/api/workbench/deduction-stations?platform=xiaoxiang${refresh?'&refresh=1':''}`:`/api/fengshen-downloads/options?${refresh?'refresh=1':'cached=1'}`,{signal:controller.signal}).then(r=>{if(!r.ok)throw Error();return r.json();}).then(data=>{if(request===sequence)accept(data);}).catch(()=>{if(!controller.signal.aborted && request===sequence){setDirectoryCities([]);setDirectoryMessage('城市目录读取失败，请重试；未使用固定城市列表');}});};
+    const changed=()=>{setDirectoryCities([]);read(true);};
+    window.addEventListener('workbench:city-directory',update);
+    window.addEventListener('workbench:platform-session-changed',changed);
+    window.addEventListener('workbench:refresh-city-directory',changed);
+    read();
+    return()=>{controller.abort();window.removeEventListener('workbench:city-directory',update);window.removeEventListener('workbench:platform-session-changed',changed);window.removeEventListener('workbench:refresh-city-directory',changed);};
+  }, [appConfig.payrollSourceMode,workspaceId]);
 
   const isLoadedRef = React.useRef(false);
 
@@ -883,9 +884,10 @@ export default function App() {
                   outPath: data.out_file || undefined,
                   finishedAt: Date.now(),
                   stats: data.stats || undefined,
+                  review: data.review_summary || undefined,
                 });
                 if (targetAction === 'core' && data.status === 'success') {
-                  setPayrollPreparation(previous => previous ? {...previous, status: 'calculated', result: { output: data.out_file || '', input_hashes_verified: true }} : previous);
+                  setPayrollPreparation(previous => previous ? {...previous, status: 'calculated', result: { ...previous.result, output: data.out_file || '', input_hashes_verified: true, review_summary: data.review_summary || previous.result?.review_summary }} : previous);
                 }
                 if (data.status === "error") {
                   setProgressText(
@@ -1057,7 +1059,7 @@ export default function App() {
                 className="wb-sidebar-item"
                 disabled={taskFormLocked}
                 aria-pressed={workspaceView === 'approval' || workspaceView === 'price-export'}
-                onClick={() => navigateWorkspace('approval')}
+                onClick={() => {setPriceRecordId(undefined);navigateWorkspace('approval');}}
               >
                 <span className="wb-sidebar-icon" aria-hidden="true">
                   <BadgeDollarSign size={15} />
@@ -1178,7 +1180,7 @@ export default function App() {
             <select className="wb-select" aria-label="切换工作台页面" disabled={taskFormLocked} value={workspaceView==='approval'||workspaceView==='price-export'?'price':workspaceView === 'history'&&historyAll ? 'history' : taskKind==='download'?downloadPlatform:taskKind} onChange={event => {
               const value = event.target.value;
               if (value === 'history'){setHistoryAll(true);navigateWorkspace('history');}
-              else if(value==='price')navigateWorkspace('approval');
+              else if(value==='price'){setPriceRecordId(undefined);navigateWorkspace('approval');}
               else if(DOWNLOAD_PLATFORMS.some(platform=>platform.id===value))openDownloadModule(value as DownloadPlatform);
               else {setHistoryAll(false);setTaskKind(value as TaskKind); navigateWorkspace('create'); }
             }}>
@@ -1207,6 +1209,8 @@ export default function App() {
                 <p className="text-xs mb-3 text-slate-600">
                   检测到以下团队在配置文件中没有对应的城市映射，请手动指定其归属城市以继续核算流程：
                 </p>
+                <p className="wb-muted">{directoryMessage}</p>
+                <button type="button" className="wb-button" onClick={()=>window.dispatchEvent(new CustomEvent('workbench:refresh-city-directory'))}>刷新城市目录</button>
 
                 <div className="flex flex-col gap-2 max-h-48 overflow-y-auto custom-scrollbar pr-1 mb-3">
                   {missingCityTeams.map((team) => (
@@ -1226,7 +1230,7 @@ export default function App() {
                         className="text-xs rounded-md border px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-sky-700 max-w-full sm:max-w-[200px] border-slate-300 bg-white text-slate-800"
                       >
                         <option value="">-- 请选择城市 --</option>
-                        {(appConfig.cities.length > 0 ? appConfig.cities : ["北京", "上海", "广州", "深圳", "宁波", "天津", "大连", "泉州", "东莞", "韶关", "保定", "茂南", "安宁", "香格里拉", "宜良", "嵩明", "维西", "三亚"]).map((city) => (
+                        {directoryCities.map((city) => (
                           <option key={city} value={city}>
                             {city}
                           </option>
@@ -1258,8 +1262,8 @@ export default function App() {
               </section>
             )}
 
-            {workspaceView==='approval' && <LanorangeApprovals apiFetch={fetchWithAuth} workspaceId={workspaceId} onActiveCount={setApprovalActiveCount} onSwitchView={navigateWorkspace}/>}
-            {workspaceView==='price-export' && <LanorangePriceExports apiFetch={fetchWithAuth} workspaceId={workspaceId} onActiveCount={setPriceExportActiveCount} onSwitchView={navigateWorkspace}/>}
+            {workspaceView==='approval' && <LanorangeApprovals focusId={priceRecordId} apiFetch={fetchWithAuth} workspaceId={workspaceId} onActiveCount={setApprovalActiveCount} onSwitchView={view=>{setPriceRecordId(undefined);navigateWorkspace(view);}}/>}
+            {workspaceView==='price-export' && <LanorangePriceExports focusId={priceRecordId} apiFetch={fetchWithAuth} workspaceId={workspaceId} onActiveCount={setPriceExportActiveCount} onSwitchView={view=>{setPriceRecordId(undefined);navigateWorkspace(view);}}/>}
             <section hidden={workspaceView==='approval' || workspaceView==='price-export' || (workspaceView !== 'history' && taskKind === 'payroll')} aria-label="任务下载">
               <FengshenDownloadCenter
                 apiFetch={fetchWithAuth}
@@ -1276,7 +1280,7 @@ export default function App() {
                 onOpenPayroll={id => void openPayrollBatch(id)}
                 onNavigateGenerate={handleNavigateGenerate}
                 onNavigatePayroll={handleNavigatePayroll}
-                onOpenPrice={navigateWorkspace}
+                onOpenPrice={(view,id)=>{setPriceRecordId(id);navigateWorkspace(view);}}
                 prefill={downloadPrefill}
                 onActiveCountChange={setActiveDownloadCount}
                 onOpenFengshenLogin={() => setFengshenLoginRequest(value => value + 1)}
@@ -1293,7 +1297,7 @@ export default function App() {
                   onNavigateDownloadCenter={() => { setTaskKind('download'); navigateWorkspace('create'); }}
                   deductionVersion={deductionVersion}
                   appTheme={appTheme}
-                  config={appConfig}
+                  config={{...appConfig,cities:directoryCities}}
                   onConfigChange={(patch) => setAppConfig(prev => ({ ...prev, ...patch }))}
                   runningTask={runningTask}
                   isRiderSourceUploading={isRiderSourceUploading}
@@ -1326,11 +1330,11 @@ export default function App() {
           </main>
         </div>
       </div>
-      {globalTemplatesOpen && <WorkbenchDrawer title="系统模板" wide bodyClassName="wb-template-body" onClose={() => setGlobalTemplatesOpen(false)}><SystemTemplatesPanel /></WorkbenchDrawer>}
+      {globalTemplatesOpen && <WorkbenchDrawer title="系统模板" wide bodyClassName="wb-template-body" onClose={() => setGlobalTemplatesOpen(false)}><SystemTemplatesPanel onNavigatePayroll={()=>{setGlobalTemplatesOpen(false);handleNavigatePayroll();}} /></WorkbenchDrawer>}
       {settingsOpen && <WorkbenchDrawer title="工作台设置" onClose={() => setSettingsOpen(false)}>
         <section className="wb-setting-row"><div><h3>扣款配置</h3><p className="wb-muted">维护默认配置；核算开始时自动保存实际采用的规则。</p></div><button className="wb-button" onClick={() => { setSettingsOpen(false); setDeductionDefaultOnly(true); setDeductionOpen(true); }}>扣款设置</button></section>
       </WorkbenchDrawer>}
-      {deductionOpen && <DeductionSettings batchId={deductionDefaultOnly ? undefined : payrollPreparation?.id} apiFetch={fetchWithAuth} onClose={() => { setDeductionOpen(false); setDeductionVersion(value => value + 1); }} onSaved={() => setDeductionVersion(value => value + 1)} />}
+      {deductionOpen && <DeductionSettings platform={(!deductionDefaultOnly && payrollPreparation ? payrollPreparation.mode : appConfig.payrollSourceMode)==='xiaoxiang'?'xiaoxiang':'fengshen'} batchId={deductionDefaultOnly ? undefined : payrollPreparation?.id} apiFetch={fetchWithAuth} onClose={() => { setDeductionOpen(false); setDeductionVersion(value => value + 1); }} onSaved={() => setDeductionVersion(value => value + 1)} />}
 
 
       <UploadProgressOverlay status={uploadStatus} appTheme={appTheme} />

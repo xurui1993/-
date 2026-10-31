@@ -945,6 +945,10 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
                 run_step([description],merchant_download)
         return files
     blue_city_map = None
+    directory_session_version = None
+    if 'abnormal_riders' in selected:
+        from lanorange_approvals import current_version
+        directory_session_version = current_version()
     for description in requested:
         if description['dataset'] not in LANORANGE_DATASETS: continue
         def blue_download():
@@ -1012,13 +1016,19 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
             generated_dir.mkdir(parents=True, exist_ok=True)
             context.update(raw=generated_dir, kind='abnormal_riders')
             set_phase("generating")
+            from station_city_resolution import read_directory
+            try:
+                station_directory = read_directory(expected_version=directory_session_version)
+            except Exception:
+                station_directory = {}
+                progress_log('站点目录暂未获取：保留人工映射和来源资料中的城市，无法确认的归属标为待核对')
             generated = generate_abnormal_riders(
                 find("lanorange_batch_quit"), find("lanorange_rider_quit"),
                 find("lanorange_rider_report"), find("lanorange_rider_leave"),
                 find("lanorange_rider_archive"), generated_dir,
                 log=progress_log, cancelled=cancelled,
                 detail_file=find("rider_detail", optional=True),
-                info_file=find("rider_info", optional=True))
+                info_file=find("rider_info", optional=True), station_directory=station_directory)
             return [publish(generated, root, description)]
         run_step([description], abnormal_riders_generate)
     if all(value['dataset'] in LANORANGE_DATASETS or value['dataset'] == 'abnormal_riders'

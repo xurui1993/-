@@ -2,8 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Download, FileSpreadsheet, RefreshCw } from 'lucide-react';
 import { classifyTemplateCategory } from '../lib/workbench';
 
-export function SystemTemplatesPanel() {
-  const [templates, setTemplates] = useState<{ filename: string; size: number }[]>([]);
+export function SystemTemplatesPanel({onNavigatePayroll}: {onNavigatePayroll?:()=>void}) {
+  const [templates, setTemplates] = useState<{ filename: string; size: number; available?:boolean; error?:string; scope?:string; business_line?:string; mtime?:number; content_version?:string }[]>([]);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<'all' | '淘宝闪购' | '美团小象' | '通用模板'>('all');
   const [loading, setLoading] = useState(true);
@@ -62,13 +62,14 @@ export function SystemTemplatesPanel() {
                 <span className={`wb-sys-badge ${meta.badgeClass}`}>{meta.tag}</span>
                 <h3>{item.filename}</h3>
               </div>
-              <p className="wb-muted">标准薪资申请表模板 · {(item.size / 1024).toFixed(1)} KB</p>
+              <p className="wb-muted">{item.scope||meta.tag} · {(item.size / 1024).toFixed(1)} KB{item.content_version&&` · 内容标识 ${item.content_version}`}</p>
             </div>
-            <a className="wb-button" aria-label={`下载 ${item.filename}`} href={`/api/download/template?file=${encodeURIComponent(item.filename)}`} download><Download size={15} />下载</a>
+            {item.available===false?<div><p className="wb-error">{item.error||'模板不可用，请恢复正确版本'}</p><button className="wb-button" disabled>不可下载</button></div>:<a className="wb-button" aria-label={`下载 ${item.filename}`} href={`/api/download/template?file=${encodeURIComponent(item.filename)}`} download><Download size={15} />下载</a>}
           </article>
         );
       })}
     </div>
+    {onNavigatePayroll&&<footer className="wb-template-next"><span>填写好薪资申请表后，到薪资核算上传。</span><button type="button" className="wb-button" onClick={onNavigatePayroll}>去薪资核算</button></footer>}
   </section>;
 }
 

@@ -1,3 +1,4 @@
+import type { PayrollReview } from './PayrollReviewSummary';
 import React, { useState, useRef } from 'react';
 import { PayrollPerformancePanel, type PayrollPerformance } from './PayrollPerformancePanel';
 import { inferDatasetSystemTag } from '../lib/workbench';
@@ -9,7 +10,7 @@ export interface PayrollPreparationState {
   status: string;
   performance?: PayrollPerformance;
   created_at?: string;
-  result?: { output: string; input_hashes_verified: boolean };
+  result?: { output: string; input_hashes_verified: boolean; review_summary?: PayrollReview };
   deductions?: { version: string; scope: string; frozen: boolean };
   plan: {city: string; start: string; end: string; month: string; applicants: number};
   jobs: string[];

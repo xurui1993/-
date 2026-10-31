@@ -2,10 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Plus, Trash2, Upload, Download, Table2, SlidersHorizontal, Check, X } from 'lucide-react';
 import { WorkbenchDrawer } from './WorkbenchDrawer';
 import { extractDeductionColumns, validateDeductionRows, type DeductionRow } from '../lib/workbench';
+import { DeductionStationPicker } from './DeductionStationPicker';
+import { selectDeductionStation, type DeductionStation, type StationPlatform } from '../lib/deductionStations';
 
-export const DeductionSettings = React.memo(function DeductionSettings({ batchId, apiFetch, onClose, onSaved }: {
+export const DeductionSettings = React.memo(function DeductionSettings({ batchId, apiFetch, onClose, onSaved, platform = 'fengshen' }: {
   batchId?: string; apiFetch: (url: string, init?: RequestInit) => Promise<Response>;
-  onClose: () => void; onSaved: () => void;
+  onClose: () => void; onSaved: () => void; platform?: StationPlatform;
 }) {
   const [scope, setScope] = useState<'default' | 'batch'>(batchId ? 'batch' : 'default');
   const [viewMode, setViewMode] = useState<'table' | 'detail'>('table');
@@ -23,13 +25,16 @@ export const DeductionSettings = React.memo(function DeductionSettings({ batchId
   const [newColName, setNewColName] = useState('');
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
   const [pendingAction, setPendingAction] = useState<{ type: 'close' } | { type: 'scope'; nextScope: 'default' | 'batch' } | null>(null);
+  const [stationTarget,setStationTarget]=useState<{row:number|null}|null>(null);
+  const [stationPlatform,setStationPlatform]=useState<StationPlatform>(platform);
+  useEffect(()=>setStationPlatform(platform),[platform]);
 
   const upload = useRef<HTMLInputElement>(null);
   const url = scope === 'batch' ? `/api/workbench/batches/${batchId}/deductions` : '/api/workbench/deductions';
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoaded(false); setError(''); setMessage(''); setBusy(true); setPendingAction(null); setConfirmDeleteIdx(null);
+    setLoaded(false); setError(''); setMessage(''); setBusy(true); setPendingAction(null); setConfirmDeleteIdx(null);setStationTarget(null);
     void apiFetch(url, { signal: controller.signal }).then(async response => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '配置读取失败');
@@ -118,6 +123,21 @@ export const DeductionSettings = React.memo(function DeductionSettings({ batchId
   const filteredRows = rows
     .map((row, i) => ({ row, i }))
     .filter(({ row }) => `${row['城市'] || ''} ${row['团队名称'] || ''} ${row['团队ID'] || ''}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const pickerRow=stationTarget?.row!=null?rows[stationTarget.row]:undefined;
+  const addManualStation=()=>{
+    if(frozen||busy)return;
+    const defaultCols=Object.fromEntries(deductionColumns.map(col=>[col,0]));
+    setRows(previous=>[...previous,{城市:'',团队名称:'',团队ID:'',...defaultCols}]);
+    setIndex(rows.length);setSearch('');setDirty(true);setStationTarget(null);setMessage('');
+  };
+  const chooseStation=(station:DeductionStation)=>{
+    if(frozen||busy)throw Error('本批次配置当前不可修改，请返回后检查状态。');
+    if(!stationTarget)throw Error('请选择要维护的配置行。');
+    const defaults=Object.fromEntries(deductionColumns.map(col=>[col,0]));
+    const updated=selectDeductionStation(rows,stationTarget.row,station,defaults);
+    setRows(updated);setIndex(stationTarget.row??rows.length);setSearch('');setDirty(true);setError('');
+    setMessage(`已选 ${station.city} · ${station.name}，保存后生效。`);setStationTarget(null);
+  };
 
   return (
     <WorkbenchDrawer title="站点扣款配置" wide onClose={requestClose}>
@@ -210,18 +230,13 @@ export const DeductionSettings = React.memo(function DeductionSettings({ batchId
                   )}
                   <button
                     type="button"
-                    className="wb-button"
+                    className="wb-primary"
                     disabled={frozen || busy}
-                    onClick={() => {
-                      const defaultCols = Object.fromEntries(deductionColumns.map(col => [col, 0]));
-                      setRows(previous => [...previous, { 城市: '', 团队名称: '', 团队ID: '', ...defaultCols }]);
-                      setIndex(rows.length);
-                      setSearch('');
-                      setDirty(true);
-                    }}
+                    onClick={() => setStationTarget({row:null})}
                   >
-                    <Plus size={15} />站点
+                    <Plus size={15} />从平台新增站点
                   </button>
+                  <button type="button" className="wb-button" disabled={frozen||busy} onClick={addManualStation}>手动新增</button>
                 </div>
               </div>
 
@@ -251,14 +266,20 @@ export const DeductionSettings = React.memo(function DeductionSettings({ batchId
                           <tr key={i} className={index === i ? 'is-selected-row' : ''} onClick={() => setIndex(i)}>
                             {metaColumns.map(col => (
                               <td key={col} className="is-sticky-col">
-                                <input
+                                {col==='团队名称'?<div className="wb-station-field"><input
+                                  className="wb-table-cell-input is-meta"
+                                  aria-label={`${row['团队名称']||`站点${i+1}`} ${col}`}
+                                  value={String(row[col]??'')} placeholder={col} disabled={frozen||busy}
+                                  onChange={event=>updateRowField(i,col,event.target.value)}/>
+                                  <button type="button" className="wb-link" disabled={frozen||busy} aria-label={`从平台选择站点 ${row['团队名称']||i+1}`} onClick={event=>{event.stopPropagation();setStationTarget({row:i});}}>从平台选择</button>
+                                </div>:<input
                                   className="wb-table-cell-input is-meta"
                                   aria-label={`${row['团队名称'] || `站点${i + 1}`} ${col}`}
                                   value={String(row[col] ?? '')}
                                   placeholder={col}
                                   disabled={frozen || busy}
                                   onChange={event => updateRowField(i, col, event.target.value)}
-                                />
+                                />}
                               </td>
                             ))}
                             {deductionColumns.map(col => {
@@ -359,7 +380,9 @@ export const DeductionSettings = React.memo(function DeductionSettings({ batchId
                           </button>
                         )}
                       </div>
-                      {Object.entries(selected).map(([key, value]) => (
+                      {Object.entries(selected).map(([key, value]) => key==='团队名称'?(
+                        <div key={key} className="wb-station-detail-field"><label><span>团队名称</span><input className="wb-input" aria-label="当前站点团队名称" value={String(value??'')} disabled={frozen||busy} onChange={event=>update(key,event.target.value)}/></label><button type="button" className="wb-button" disabled={frozen||busy} onClick={()=>setStationTarget({row:index})}>从平台选择</button></div>
+                      ):(
                         <label key={key}>
                           <span>{key}</span>
                           {typeof value === 'boolean' ? (
@@ -464,6 +487,10 @@ export const DeductionSettings = React.memo(function DeductionSettings({ batchId
           </footer>
         </>
       )}
+      {stationTarget&&<DeductionStationPicker apiFetch={apiFetch} platform={stationPlatform} onPlatformChange={setStationPlatform}
+        current={pickerRow?{city:String(pickerRow['城市']??''),name:String(pickerRow['团队名称']??''),id:String(pickerRow['团队ID']??'')}:undefined}
+        disabled={frozen||busy} onSelect={chooseStation} onClose={()=>setStationTarget(null)}
+        onManual={()=>{if(stationTarget.row===null)addManualStation();else{setIndex(stationTarget.row);setViewMode('detail');setStationTarget(null);}}}/>}
     </WorkbenchDrawer>
   );
 });

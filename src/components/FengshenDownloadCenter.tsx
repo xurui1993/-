@@ -1,3 +1,4 @@
+import { CollectionScope } from './CollectionScope';
 import { TaskFlowSteps } from './TaskFlowSteps';
 import { recoverySummary } from '../lib/downloadCenterLogic';
 import { readDownloadResponse, saveDownloadBlob, downloadOutput, downloadErrorMessage } from '../lib/outputDownload';
@@ -117,7 +118,7 @@ interface Props {
   onOpenPayroll?: (id: string) => void;
   onNavigateGenerate?: (cities: string[], start: string, end: string) => void;
   onNavigatePayroll?: (city?: string) => void;
-  onOpenPrice?: (view: 'approval' | 'price-export') => void;
+  onOpenPrice?: (view: 'approval' | 'price-export', id?: string) => void;
   prefill?: {
     cities?: string[];
     start?: string;
@@ -170,8 +171,8 @@ class DownloadRequestError extends Error {
 function statusInfo(status: string) {
   const normalized = (status || '').toLowerCase();
   if (['success', 'succeeded', 'completed', 'complete'].includes(normalized)) return { label: '已完成', color: 'text-emerald-700 bg-emerald-50 border border-emerald-200' };
-  if (['partial', 'partial_failed', 'partial_failure', 'partially_completed'].includes(normalized)) return { label: '部分失败', color: 'text-amber-700 bg-amber-50 border border-amber-200' };
-  if (['waiting_login', 'waiting_for_login', 'login_required', 'waiting_auth'].includes(normalized)) return { label: '等待登录', color: 'text-amber-700 bg-amber-50 border border-amber-200' };
+  if (['partial', 'partial_failed', 'partial_failure', 'partially_completed'].includes(normalized)) return { label: '部分完成', color: 'text-amber-700 bg-amber-50 border border-amber-200' };
+  if (['waiting_login', 'waiting_for_login', 'login_required', 'waiting_auth'].includes(normalized)) return { label: '等待认证', color: 'text-amber-700 bg-amber-50 border border-amber-200' };
   if (['queued', 'pending', 'waiting'].includes(normalized)) return { label: '排队中', color: 'text-slate-600 bg-slate-100 border border-slate-200' };
   if (['error', 'failed'].includes(normalized)) return { label: '失败', color: 'text-rose-700 bg-rose-50 border border-rose-200' };
   if (['cancelled', 'canceled'].includes(normalized)) return { label: '已取消', color: 'text-slate-600 bg-slate-100 border border-slate-200' };
@@ -269,6 +270,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const [presetInputOpen, setPresetInputOpen] = useState(false);
   const [presetDraft, setPresetDraft] = useState('');
   const [systemFilter, setSystemFilter] = useState<'all' | 'fengshen' | 'lanorange' | 'baize' | 'xiaoxiang'>('all');
+  const [historyFocusId,setHistoryFocusId]=useState('');
   const [submittedTaskInfo, setSubmittedTaskInfo] = useState<{ id: string; name: string } | null>(null);
 
   const lastTaskKey = `download-last-task:${user.id}:${workspaceId}`;
@@ -366,6 +368,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         if (!Array.isArray(data.cities) || !Array.isArray(data.datasets)) throw new Error('下载选项暂不可用，请重试');
         registerGeneratorIds((data.generators || []).map((report: ReportDefinition) => report.id));
         setOptions(data);
+        window.dispatchEvent(new CustomEvent('workbench:city-directory',{detail:data}));
         setCities(previous => previous.filter(city => data.cities.some((item: { name: string; disabled?: boolean }) => item.name === city && !item.disabled)));
         setDatasets(previous => previous.filter(dataset => data.datasets.some((item: { id: string }) => item.id === dataset)));
       })
@@ -804,7 +807,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   useEffect(() => { onActiveCountChange?.(runningCount); }, [runningCount, onActiveCountChange]);
   const failedItems = selectedRun?.items?.filter(item => ['error', 'failed', 'interrupted'].includes(item.status)) || [];
   const choiceStyle = (selected: boolean) => `flex min-w-0 cursor-pointer items-center gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm transition-all select-none ${selected ? 'border-sky-600 bg-sky-50 text-sky-900 font-medium shadow-2xs' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50/80'}`;
-  const primaryButton = 'inline-flex items-center justify-center gap-2 rounded-lg bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-40 disabled:cursor-not-allowed shadow-xs';
+  const primaryButton = 'wb-primary';
   const fieldStyle = 'min-w-0 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-sky-600 focus:outline-none [color-scheme:light]';
 
   return (
@@ -836,7 +839,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         return (
           <>
             {view === 'create' && <>
-              <section className={taskKind === 'generate' ? 'rb-shell' : `${panel} wb-task-form wb-download-workbench`} aria-label={taskKind === 'generate' ? '业务报表配置' : '新建下载配置'}>
+              <section className={taskKind === 'generate' ? 'rb-shell' : `${panel} wb-task-form wb-download-workbench ${noCity && noDate ? 'is-simple-collection' : ''}`} aria-label={taskKind === 'generate' ? '业务报表配置' : '新建下载配置'}>
                 {taskKind === 'download' && !embedded && <div className="wb-form-heading">
                   <div className="wb-stage-heading-left">
                     <div className="wb-stage-title-row">
@@ -908,38 +911,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                   </div>
                 </div>}
 
-                {noCity && noDate && (
-                  <section aria-label="全量采集范围说明" className="wb-step-card wb-step-card-fullscope">
-                    <div className="wb-step-card-header">
-                      <div className="wb-step-badge">
-                        <span className="wb-step-number">01</span>
-                        <span className="wb-step-title">采集范围与账期</span>
-                        <span className="wb-fullscope-pill">全量自动覆盖 · 无需手动筛选</span>
-                      </div>
-                      <span className="wb-step-hint">
-                        {platform === 'baize' ? '商翼系统全量直连模式' : '蓝橙系统全量快照模式'}
-                      </span>
-                    </div>
-                    <div className="wb-fullscope-grid">
-                      <div className="wb-fullscope-stat">
-                        <span className="wb-metric-label">处理城市与站点</span>
-                        <strong className="wb-metric-value">
-                          {platform === 'baize' ? '全部站点（商翼全量）' : '全部授权城市（全量）'}
-                        </strong>
-                      </div>
-                      <div className="wb-fullscope-stat">
-                        <span className="wb-metric-label">业务核算账期</span>
-                        <strong className="wb-metric-value">全量历史无限制（实时快照）</strong>
-                      </div>
-                      <div className="wb-fullscope-stat">
-                        <span className="wb-metric-label">产出交付规格</span>
-                        <strong className="wb-metric-value">
-                          {platform === 'baize' ? '单份全量员工原表（独立归档）' : '每类资料自动生成 1 份汇总原表'}
-                        </strong>
-                      </div>
-                    </div>
-                  </section>
-                )}
+                {noCity && noDate && <CollectionScope platform={platform} />}
 
                 {!noCity && (
                   <fieldset aria-labelledby="download-cities-label" className="wb-step-card">
@@ -1101,7 +1073,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                   {!platform && (
                     <div className="wb-step-card-header">
                       <div className="wb-step-badge">
-                        <span className="wb-step-number">{noCity && noDate ? '02' : noCity || noDate ? '02' : '03'}</span>
+                        <span className="wb-step-number">{noCity && noDate ? '01' : noCity || noDate ? '02' : '03'}</span>
                         <span id="download-datasets-label" className="wb-step-title">选择资料</span>
                         <span className="wb-step-count-pill">已选 {datasets.length}</span>
                       </div>
@@ -1112,7 +1084,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                     const ids = groupDatasets.filter(value => !isMerchant(value.id)).map(value => value.id);
                     const allSelected = ids.length > 0 && ids.every(id => datasets.includes(id));
                     const selectedCount = datasets.filter(id => datasetGroup(id) === group).length;
-                    const stepNum = noCity && noDate ? '02' : noCity || noDate ? '02' : '03';
+                    const stepNum = noCity && noDate ? '01' : noCity || noDate ? '02' : '03';
                     return (
                       <div key={group} className="wb-source-group">
                         <div className={platform ? 'wb-step-card-header' : 'wb-source-header'}>
@@ -1175,7 +1147,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                 {!uncertainCreate && matchingRun && <div className="mt-3 rounded-lg bg-sky-50 border border-sky-200 p-3 text-xs text-sky-800 space-y-2"><p>{completedMatch ? '相同选择已有文件，可直接查看和下载。' : '相同选择已有任务正在执行，可直接查看进度。'}</p>{completedMatch && <label className="flex items-center gap-2"><input type="checkbox" checked={duplicateApproval === currentSelectionKey} disabled={creating} onChange={event => setDuplicateApproval(event.target.checked ? currentSelectionKey : '')} />重新采集，创建新版本</label>}</div>}
               </div>
               <aside className="wb-task-preview wb-preview-compact" aria-label="本次任务已选清单与执行">
-                <div className="wb-compact-rail-top">
+                {!(noCity && noDate) && <div className="wb-compact-rail-top">
                   <div className="wb-compact-rail-header">
                     <div className="wb-compact-rail-title">
                       <h4>已选清单</h4>
@@ -1251,10 +1223,10 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                       </div>
                     )}
                   </div>
-                </div>
+                </div>}
 
                 <div className="wb-compact-rail-bottom">
-                  <div className="wb-compact-scope-box">
+                  {!(noCity && noDate) && <div className="wb-compact-scope-box">
                     <div className="wb-compact-scope-header">
                       <span>执行范围核对</span>
                       <span className="wb-compact-scope-sub">北京时间</span>
@@ -1280,9 +1252,10 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                         {railSummary.thirdRowValue}
                       </span>
                     </div>
-                  </div>
+                  </div>}
 
                   <div className="wb-compact-action-area">
+                    {noCity && noDate && <p className="wb-muted">已选 {datasets.length} 类资料 · 成品在任务中心领取</p>}
                     <button
                       type="button"
                       onClick={() => void startDownload()}
@@ -1316,8 +1289,9 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                           </button>
                         </div>
                         <p className="mt-1 text-slate-600 text-[11px] leading-relaxed">
-                          任务已在后台执行，可前往左侧「任务中心」或右上角通知查看实时进度与交付文件。
+                          任务已在后台执行，可直接查看进度与结果。
                         </p>
+                        <button type="button" className="wb-button mt-2" onClick={()=>{setHistoryFocusId(submittedTaskInfo.id);selectedIdRef.current=submittedTaskInfo.id;setSelectedId(submittedTaskInfo.id);setView('history');}}>查看本次任务</button>
                       </div>
                     )}
                   </div>
@@ -1364,7 +1338,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
               </div>
             )}
             <div className={recordModule ? 'wb-stage-history-body' : undefined}>
-              <DownloadRecords key={recordModule||'all'} recordModule={recordModule} apiFetch={apiFetch} workspaceId={workspaceId} selectedRunId={selectedId}
+              <DownloadRecords initialRunId={historyFocusId} onInitialFocusHandled={()=>setHistoryFocusId('')} key={recordModule||'all'} recordModule={recordModule} apiFetch={apiFetch} workspaceId={workspaceId} selectedRunId={selectedId}
                 datasetLabel={id => id === 'payroll' ? '兼职薪资核算' : datasetLabel(id)} refreshVersion={navigation?.version} unified onOpenPayroll={onOpenPayroll}
                 onNavigateGenerate={onNavigateGenerate}
                 onNavigatePayroll={onNavigatePayroll}

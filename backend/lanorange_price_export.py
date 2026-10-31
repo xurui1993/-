@@ -247,6 +247,9 @@ def activity(request:Request):
 @router.get('/exports')
 def history(request:Request):
     scope=owner(request);return {'exports':call(lambda:manager().history(scope))}
+@router.get('/exports/{key}')
+def detail(key:str,request:Request):
+    scope=owner(request);return call(lambda:manager().get(scope,key))
 @router.get('/exports/{key}/result.xlsx')
 def result(key:str,request:Request):
     scope=owner(request);path=call(lambda:manager().result(scope,key));return FileResponse(path,filename=path.name,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Cache-Control':'no-store'})

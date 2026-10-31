@@ -1,3 +1,4 @@
+import { TaskOutcome } from './TaskOutcome';
 import React,{useEffect,useRef,useState} from 'react';
 import {LanorangePriceFilters} from './LanorangePriceFilters';
 import {WorkbenchDrawer} from './WorkbenchDrawer';
@@ -25,7 +26,7 @@ function PriceTable({price}:{price:Price}){
     <div className="wb-approval-pagination"><span>明细第{page}/{pages}页</span><button className="wb-button" disabled={page===1} onClick={()=>setPage(p=>p-1)}>上一页明细</button><button className="wb-button" disabled={page>=pages} onClick={()=>setPage(p=>p+1)}>下一页明细</button></div></>;
 }
 
-export function LanorangeApprovals({apiFetch,workspaceId,onActiveCount,onSwitchView}:{apiFetch:Fetcher;workspaceId:string;onActiveCount:(count:number)=>void;onSwitchView?:(view:'approval'|'price-export')=>void}){
+export function LanorangeApprovals({apiFetch,workspaceId,onActiveCount,onSwitchView,focusId}:{apiFetch:Fetcher;workspaceId:string;onActiveCount:(count:number)=>void;onSwitchView?:(view:'approval'|'price-export')=>void;focusId?:string}){
   const fetchRef=useRef(apiFetch);fetchRef.current=apiFetch;
   const [draft,setDraft]=useState<Query>({...EMPTY}),[query,setQuery]=useState<Query>({...EMPTY}),[page,setPage]=useState(1),[refresh,setRefresh]=useState(0);
   const [rows,setRows]=useState<Task[]>([]),[total,setTotal]=useState(0),[actor,setActor]=useState(''),[sessionVersion,setSessionVersion]=useState('');
@@ -41,11 +42,17 @@ export function LanorangeApprovals({apiFetch,workspaceId,onActiveCount,onSwitchV
   useEffect(()=>{
     try{const value=JSON.parse(sessionStorage.getItem(attemptKey)||'null');if(value && typeof value.preview_id==='string' && typeof value.request_id==='string')setAttempt(value);}catch{}
   },[attemptKey]);
+  useEffect(()=>{
+    if(!focusId)return;
+    let disposed=false;
+    void request<Batch>(`/batches/${encodeURIComponent(focusId)}`).then(value=>{if(!disposed){setBatch(value);document.getElementById('price-record-result')?.scrollIntoView({block:'start'});}}).catch(err=>{if(!disposed)setError(err instanceof Error?err.message:'指定记录读取失败');});
+    return()=>{disposed=true;};
+  },[focusId,workspaceId]);
   async function readHistory(){
     try{
       const value=await request<{batches:Batch[]}>('/batches');if(!alive.current)return;
       setHistory(value.batches);onActiveCount(value.batches.filter(b=>ACTIVE.has(b.status)).length);
-      setBatch(current=>value.batches.find(b=>b.id===current?.id) || value.batches[0] || null);
+      setBatch(current=>value.batches.find(b=>b.id===current?.id) || current || value.batches[0] || null);
     }catch(err){if(alive.current)setError(message(err));}
   }
   useEffect(()=>{void readHistory();const timer=setInterval(()=>void readHistory(),4000);return()=>{clearInterval(timer);};},[workspaceId]);
@@ -117,14 +124,14 @@ export function LanorangeApprovals({apiFetch,workspaceId,onActiveCount,onSwitchV
       {!rows.length && <p className="wb-muted" role="status">{listBusy?'正在读取蓝橙本人待办…':'当前筛选范围没有可显示的骑手价格提审。'}</p>}
       <div className="wb-approval-pagination"><span>第{page}/{pages}页 · 每页20条</span><button className="wb-button" disabled={page<=1 || listBusy} onClick={()=>setPage(p=>p-1)}>上一页</button><button className="wb-button" disabled={page>=pages || listBusy} onClick={()=>setPage(p=>p+1)}>下一页</button></div>
     </section>
-    <section className="wb-approval-card"><div className="wb-approval-heading"><h2>审批批次</h2><button className="wb-button" disabled={!!command} onClick={()=>void readHistory()}>刷新结果</button></div>
-      {history.length>0 && <label className="wb-approval-history">查看批次<select className="wb-select" value={batch?.id || ''} onChange={e=>setBatch(history.find(b=>b.id===e.target.value) || null)}>{history.map(b=><option value={b.id} key={b.id}>{new Date(b.created*1000).toLocaleString('zh-CN')} · {batchLabels[b.status] || b.status} · {b.items.length}条</option>)}</select></label>}
-      {!batch?<p className="wb-muted">暂无审批批次。</p>:<><div className="wb-approval-toolbar"><div><strong>{batchLabels[batch.status] || batch.status}</strong><p className="wb-muted">已同意{batch.counts.success || 0} · 被拒绝{batch.counts.failed || 0} · 变化{batch.counts.changed || 0} · 待核实{batch.counts.uncertain || 0} · 未提交{batch.counts.not_sent || 0} · 等待{batch.counts.pending || 0}</p></div><div className="wb-row">
+    <section className="wb-approval-card" id="price-record-result"><div className="wb-approval-heading"><h2>审批结果</h2><button className="wb-button" disabled={!!command} onClick={()=>void readHistory()}>刷新结果</button></div>
+      {history.length>0 && <label className="wb-approval-history">查看批次<select className="wb-select" value={batch?.id || ''} onChange={e=>setBatch(history.find(b=>b.id===e.target.value) || null)}>{batch&&!history.some(b=>b.id===batch.id)&&<option value={batch.id}>当前任务 · {batchLabels[batch.status]||batch.status}</option>}{history.map(b=><option value={b.id} key={b.id}>{new Date(b.created*1000).toLocaleString('zh-CN')} · {batchLabels[b.status] || b.status} · {b.items.length}条</option>)}</select></label>}
+      {!batch?<p className="wb-muted">暂无审批批次。</p>:<><TaskOutcome task={{status:batch.status,kind:'approval',availableFiles:1}}/><div className="wb-approval-toolbar"><div><p className="wb-muted">已同意{batch.counts.success || 0} · 被拒绝{batch.counts.failed || 0} · 变化{batch.counts.changed || 0} · 待核实{batch.counts.uncertain || 0} · 未提交{batch.counts.not_sent || 0} · 等待{batch.counts.pending || 0}</p></div><div className="wb-row">
         {ACTIVE.has(batch.status) && <button className="wb-button" disabled={!!command || batch.status==='stopping'} onClick={()=>void perform('stop',async()=>{setBatch(await request<Batch>(`/batches/${batch.id}/stop`,{confirm:true}));void readHistory();})}>停止后续审批</button>}
         {!!batch.counts.uncertain && !ACTIVE.has(batch.status) && <button className="wb-button" disabled={!!command} onClick={()=>void perform('recheck',async()=>{setBatch(await request<Batch>(`/batches/${batch.id}/recheck`,{},120000));void readHistory();setRefresh(x=>x+1);})}>核实待确认结果</button>}
         <button className="wb-button" disabled={!!command} onClick={()=>void downloadResult()}>下载结果</button></div></div>
         {batch.status==='stopping' && <p className="wb-muted">当前已发出的官方请求会先核实结果，后续条目不再提交。</p>}
-        <div className="wb-approval-table"><table><thead><tr><th>业务编号</th><th>城市 / 站点</th><th>结果</th><th>说明</th></tr></thead><tbody>{batch.items.map((item,index)=><tr key={index}><td>{code(item.task)}</td><td>{item.task.cityName || '—'} / {item.task.siteName || '—'}</td><td className={item.status==='success'?'wb-success':item.status==='uncertain'?'wb-error':''}>{item.status_label}</td><td>{item.message}</td></tr>)}</tbody></table></div></>}
+        <details className="wb-receipts" key={batch.id} open={batch.status!=='completed'}><summary>逐项审批结果（{batch.items.length} 条）</summary><div className="wb-approval-table"><table><thead><tr><th>业务编号</th><th>城市 / 站点</th><th>结果</th><th>说明</th></tr></thead><tbody>{batch.items.map((item,index)=><tr key={index}><td>{code(item.task)}</td><td>{item.task.cityName || '—'} / {item.task.siteName || '—'}</td><td className={item.status==='success'?'wb-success':item.status==='uncertain'?'wb-error':''}>{item.status_label}</td><td>{item.message}</td></tr>)}</tbody></table></div></details></>}
     </section>
     {preview && <WorkbenchDrawer title="审批预览" wide onClose={()=>{if(!command)setPreview(null);}}>
       <div className="wb-approval-preview"><p><strong>蓝橙账号：{preview.actor_label}</strong></p><p>本批可提交{preview.eligible_count}条，需另行处理{preview.items.length-preview.eligible_count}条；审批意见统一为“同意”。</p><p className="wb-muted">仅同意本人当前节点，不更改单价。沿用官方默认抄送及站内通知；预览有效至{new Date(preview.expires_at*1000).toLocaleTimeString('zh-CN')}。</p>

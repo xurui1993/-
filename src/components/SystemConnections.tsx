@@ -6,8 +6,9 @@ import {WorkbenchDrawer} from './WorkbenchDrawer';
 import {platformAuthRequest} from '../lib/platformAuthApi';
 import {platformLoginLabel} from '../lib/authPresentation';
 import {getPlatformStatusCluster, getPlatformCardBadge} from '../lib/workbench';
+import {functionAvailability,type FunctionState} from '../lib/functionAvailability';
 
-type State=DesktopAuth & {state?:string;message?:string;saved?:boolean;busy?:boolean;offline?:boolean;cancelling?:boolean;release_state?:string;session_id?:string;session_version?:string};
+type State=DesktopAuth & FunctionState & {message?:string;cancelling?:boolean;release_state?:string;session_id?:string;session_version?:string};
 const platforms=[
   {key:'fengshen',label:'风神',icon:Compass},
   {key:'lanorange',label:'蓝橙',icon:Layers},
@@ -172,6 +173,8 @@ export function SystemConnections({apiFetch,fengshenStatus,onOpenFengshen,hideTr
                   )}
                 </div>
               </div>
+              <p className="wb-muted">{functionAvailability(key,value)}</p>
+              {(value.account_label || value.organization) && <p className="wb-muted">{[value.account_label,value.organization].filter(Boolean).join(' · ')}</p>}
               {(errors[key] || value.offline) && (
                 <p role="alert" className="wb-error">{errors[key] || '连接状态暂不可用，请稍候再试。'}</p>
               )}

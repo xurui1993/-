@@ -1,3 +1,4 @@
+import { PayrollReviewSummary } from './PayrollReviewSummary';
 import { PayrollPerformancePanel } from './PayrollPerformancePanel';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -131,7 +132,6 @@ export function CorePage({
   const prevRunning = useRef(false);
   useEffect(() => {const open=()=>setMoreOpen(true);window.addEventListener('workbench:payroll-more',open);return()=>window.removeEventListener('workbench:payroll-more',open);}, []);
 
-  const [fengshenConfigured, setFengshenConfigured] = useState<boolean | null>(null);
   const [shangyiAvailable, setShangyiAvailable] = useState(false);
   const riderTemplateInputRef = useRef<HTMLInputElement>(null);
 
@@ -164,16 +164,6 @@ export function CorePage({
       })
       .then(data => { if (!disposed) setShangyiAvailable(data.available === true); })
       .catch(() => { if (!disposed) setShangyiAvailable(false); });
-    return () => { disposed = true; };
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    fetch('/api/fengshen-downloads/options').then(response => {
-      if (!response.ok) throw new Error('status unavailable');
-      return response.json();
-    }).then(data => { if (!disposed) setFengshenConfigured(Array.isArray(data.datasets)); })
-    .catch(() => { if (!disposed) setFengshenConfigured(false); });
     return () => { disposed = true; };
   }, []);
 
@@ -406,7 +396,8 @@ export function CorePage({
             ) : null}
             {payrollPreparation && !newUpload && payrollPreparation.status !== 'calculated' ? preparationCard : null}
             {payrollPreparation?.status === 'calculated' && !newUpload && <div className="wb-notice">本批次已生成结果。<a className="wb-link" href={`/api/download?path=${encodeURIComponent(payrollPreparation.result?.output || '')}&workspace_id=${encodeURIComponent(workspaceId)}`}>下载结果</a> · 重新上传薪资申请表可新建批次。</div>}
-            {payrollPreparation?.status === 'calculated' && !newUpload && <PayrollPerformancePanel value={payrollPreparation.performance} />}
+            {payrollPreparation?.status === 'calculated' && !newUpload && <PayrollReviewSummary review={payrollPreparation.result?.review_summary}/>}
+            {payrollPreparation?.status === 'calculated' && !newUpload && <details className="wb-advanced"><summary>核算性能记录</summary><PayrollPerformancePanel value={payrollPreparation.performance}/></details>}
             {!payrollPreparation || newUpload ? <ControlPanel payrollSourceMode={mode} onUploadFiles={onUploadFiles} onOpenTemplates={() => setTemplatesOpen(true)} isRunning={isRunning || payrollPreparation?.status === 'calculating'} /> : null}
             <div className="wb-row wb-space mt-3"><span className="wb-muted">已有资料可随薪资申请表一并上传，缺项可逐项补传。</span><button className="wb-link" onClick={onOpenDownloads}>查看任务记录</button></div>
           </section>
@@ -439,7 +430,7 @@ export function CorePage({
         </WorkbenchDrawer>
       )}
 
-      {templatesOpen && <WorkbenchDrawer title="系统模板" wide bodyClassName="wb-template-body" onClose={() => setTemplatesOpen(false)}><SystemTemplatesPanel /></WorkbenchDrawer>}
+      {templatesOpen && <WorkbenchDrawer title="系统模板" wide bodyClassName="wb-template-body" onClose={() => setTemplatesOpen(false)}><SystemTemplatesPanel onNavigatePayroll={()=>setTemplatesOpen(false)} /></WorkbenchDrawer>}
 
     </div>
   );

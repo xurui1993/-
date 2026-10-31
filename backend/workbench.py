@@ -94,6 +94,26 @@ def get_defaults():
         raise HTTPException(400, str(exc)) from None
 
 
+@router.get('/deduction-stations')
+async def deduction_stations(request: Request, platform: str = 'fengshen', city: str = '', refresh: bool = False):
+    """Read platform options only. Selection and saving deductions remain separate."""
+    from download_accounts import require_account
+    require_account(request)
+    if platform not in ('fengshen', 'xiaoxiang'):
+        raise HTTPException(400, '请选择风神或灯塔')
+    if len(city) > 100 or any(ord(char) < 32 for char in city):
+        raise HTTPException(400, '城市参数无效')
+    from deduction_stations import catalog
+    try:
+        return await asyncio.to_thread(catalog, platform, city.strip(), refresh)
+    except HTTPException:
+        raise
+    except SourceError as error:
+        raise HTTPException(400, str(error)) from None
+    except Exception:
+        raise HTTPException(502, '站点列表暂不可用，请检查平台连接后重试；原配置保持不变') from None
+
+
 @router.put('/deductions')
 async def save_defaults(request: Request):
     from download_accounts import require_admin

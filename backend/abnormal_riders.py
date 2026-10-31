@@ -404,7 +404,7 @@ def _write_sheet(book, title, fields, widths, rows, cancelled, dynamic_widths=No
 @profiled('abnormal_riders', 5, 'output_dir')
 def generate_abnormal_riders(batch_quit_file, rider_quit_file, rider_report_file, rider_leave_file,
                              archive_file, output_dir, log=None, cancelled=None,
-                             detail_file=None, info_file=None):
+                             detail_file=None, info_file=None, station_directory=None):
     """组装异常骑手整理工作簿，返回成品文件 Path（归档命名由发布层完成）。
 
     前五项为 5 类蓝橙成品路径；detail_file/info_file 为同任务可选的风神
@@ -510,7 +510,8 @@ def generate_abnormal_riders(batch_quit_file, rider_quit_file, rider_report_file
         detail_riders.append({'team': best, 'rider_id': group['rider_id'], 'name': group['name']})
 
     catalog = _team_city_catalog()
-    city_for_team = _city_matcher(catalog)
+    from station_city_resolution import resolver
+    city_for_team, city_issues = resolver(station_directory or {}, catalog)
 
     def build_summary(team, rider_id, name, rider):
         id_card = _text((rider or {}).get('id_card'))
@@ -536,7 +537,7 @@ def generate_abnormal_riders(batch_quit_file, rider_quit_file, rider_report_file
             abnormal = '是(请假仍有单量)'
         else:
             abnormal = '否'
-        city = city_for_team(team) or (rider or {}).get('city') or '其他'
+        city = city_for_team(team) or (rider or {}).get('city') or '待核对'
         return dict(zip(SUMMARY_FIELDS, (
             city, team, rider_id, name,
             joined_remarks('batch_quit', id_card), quit_remark,
@@ -586,6 +587,12 @@ def generate_abnormal_riders(batch_quit_file, rider_quit_file, rider_report_file
         _write_sheet(book, '蓝橙骑手档案', ARCHIVE_FIELDS, (), archive, cancelled,
                      dynamic_widths=archive_widths)
         _write_sheet(book, '汇总', SUMMARY_FIELDS, SUMMARY_WIDTHS, summary_rows(), cancelled)
+        if station_directory:
+            _write_sheet(book, '站点城市目录', ('站点编号', '站点名称', '城市编号', '城市'), (24, 30, 24, 18),
+                         (dict(zip(('站点编号', '站点名称', '城市编号', '城市'), (s['id'], s['name'], s.get('city_id', ''), s['city']))) for s in station_directory.get('stations', [])), cancelled)
+        if city_issues:
+            _write_sheet(book, '城市归属待核对', ('站点名称', '人工配置城市', '后台城市', '核对原因'), (30, 18, 30, 50),
+                         (dict(zip(('站点名称', '人工配置城市', '后台城市', '核对原因'), row)) for row in city_issues.values()), cancelled)
         _checkpoint(cancelled)
         target = output_dir / ('.异常骑手整理_' + uuid.uuid4().hex + '.xlsx')
         try:

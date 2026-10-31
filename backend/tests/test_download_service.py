@@ -362,7 +362,8 @@ class DownloadServiceTests(unittest.TestCase):
 
         config = service.validate_request({"datasets": ["abnormal_riders"]}, today=TODAY)
         config.update(owner="test", archive_created_at=PUBLISHED_AT)
-        with patch('lanorange_full.collect_full', side_effect=fake_collect_full):
+        directory={'cities':['保定'], 'stations':[{'id':'0001','city_id':'001','name':'保定一站','city':'保定'}]}
+        with patch('lanorange_full.collect_full', side_effect=fake_collect_full), patch('station_city_resolution.read_directory',return_value=directory):
             files = service.execute_downloads(config, self.root / "run", lambda *_: None,
                                               threading.Event(), lambda *_: None,
                                               runner_factory=forbidden_factory)
@@ -371,7 +372,9 @@ class DownloadServiceTests(unittest.TestCase):
         self.assertEqual(generated["name"], "全部城市异常骑手整理明细表1016.xlsx")
         book = load_workbook(self.root / "run" / generated["relative_path"], read_only=True)
         try:
-            self.assertEqual(book.sheetnames, ["异常汇总", "蓝橙骑手档案", "汇总"])
+            self.assertEqual(book.sheetnames[:3], ["异常汇总", "蓝橙骑手档案", "汇总"])
+            self.assertIn('站点城市目录',book.sheetnames)
+            self.assertEqual(next(book['站点城市目录'].iter_rows(min_row=2,values_only=True))[0],'0001')
         finally:
             book.close()
 

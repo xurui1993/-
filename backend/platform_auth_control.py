@@ -59,7 +59,8 @@ def status(source):
     if meta.get('session_version') == fingerprint and not active and meta.get('checked_at', '') >= base.get('checked_at', ''):
         base = {**base, **{k: v for k, v in meta.items() if k != '_clock'}}
     from auth_diagnostics import history
-    return {**base, 'diagnostics': history(source), 'source': source, 'session_version': fingerprint, 'saved': any(p.exists() for p in files(source))}
+    from function_availability import snapshot
+    return {**base, 'capabilities': snapshot(source, fingerprint), 'diagnostics': history(source), 'source': source, 'session_version': fingerprint, 'saved': any(p.exists() for p in files(source))}
 
 
 def display_identity(data):

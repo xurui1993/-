@@ -1383,63 +1383,10 @@ async function startServer() {
     });
   }
 
-  // Automated Cleanup Task for Tenant Data (saves disk space)
-  const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // Run every 6 hours
-  const MAX_AGE_MS = 24 * 60 * 60 * 1000; // Data older than 24 hours gets deleted
+  // Business inputs, configuration and output evidence have no age-based expiry.
+  // Offline verified snapshots are managed by scripts/business_backup.py.
+  console.log("Business data is retained; automatic business-directory cleanup is disabled.");
 
-  const cleanupOldTenantData = () => {
-    console.log(
-      "\n[Cleanup Task] 🧹 Running tenant historical cache cleanup...",
-    );
-    const now = Date.now();
-    const dirsToClean = [
-      path.join(process.cwd(), "data"),
-      path.join(process.cwd(), "uploads"),
-    ];
-    let deletedCount = 0;
-
-    for (const baseDir of dirsToClean) {
-      if (!fs.existsSync(baseDir)) continue;
-
-      const tenants = fs.readdirSync(baseDir);
-      for (const tenantDir of tenants) {
-        // Exclude system/hidden files
-        if (
-          tenantDir.startsWith(".") ||
-          !fs.statSync(path.join(baseDir, tenantDir)).isDirectory()
-        ) {
-          continue;
-        }
-
-        // Tenant IDs usually start with 'u_', but we can genericize it to check modified time.
-        const tenantPath = path.join(baseDir, tenantDir);
-        try {
-          // If the folder hasn't been modified in 24 hours, delete it to save space
-          const stats = fs.statSync(tenantPath);
-          if (now - stats.mtimeMs > MAX_AGE_MS) {
-            fs.rmSync(tenantPath, { recursive: true, force: true });
-            console.log(
-              `[Cleanup Task] 🗑️ Deleted outdated tenant storage: ${tenantPath}`,
-            );
-            deletedCount++;
-          }
-        } catch (e) {
-          console.error(`[Cleanup Task] ❌ Failed to delete ${tenantPath}:`, e);
-        }
-      }
-    }
-    console.log(
-      `[Cleanup Task] ✅ Cleanup complete. Cleared ${deletedCount} expired tenant caches.\n`,
-    );
-  };
-
-  // LAN testing can disable cleanup while retaining access from colleagues.
-  if (!localTestMode && process.env.DISABLE_DATA_CLEANUP !== "1") {
-    setTimeout(cleanupOldTenantData, 10000);
-    setInterval(cleanupOldTenantData, CLEANUP_INTERVAL_MS);
-  } else {
-    console.log("Automatic data cleanup is disabled.");
-  }
 
   {
     console.log(`Server is running! You can access it on:`);

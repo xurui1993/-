@@ -1,3 +1,4 @@
+import { TaskOutcome } from './TaskOutcome';
 import React,{useEffect,useRef,useState} from 'react';
 import {LanorangePriceFilters} from './LanorangePriceFilters';
 import {WorkbenchDatePicker} from './WorkbenchDatePicker';
@@ -9,13 +10,19 @@ const BASE='/api/fengshen-downloads/lanorange-prices';
 const ACTIVE=new Set(['queued','running','stopping']);
 const labels:Record<string,string>={queued:'等待采集',running:'正在导出',stopping:'正在停止',completed:'已完成',partial:'部分完成',failed:'导出失败',interrupted:'执行曾中断',cancelled:'已停止'};
 const defaultQuery=():Query=>({month:'',city:'',station:'',date_from:'',date_to:''});
-export function LanorangePriceExports({apiFetch,workspaceId,onActiveCount,onSwitchView}:{apiFetch:(url:string,init?:RequestInit)=>Promise<Response>;workspaceId:string;onActiveCount:(count:number)=>void;onSwitchView?:(view:'approval'|'price-export')=>void}){
+export function LanorangePriceExports({apiFetch,workspaceId,onActiveCount,onSwitchView,focusId}:{apiFetch:(url:string,init?:RequestInit)=>Promise<Response>;workspaceId:string;onActiveCount:(count:number)=>void;onSwitchView?:(view:'approval'|'price-export')=>void;focusId?:string}){
   const [query,setQuery]=useState<Query>(defaultQuery),[history,setHistory]=useState<Export[]>([]),[job,setJob]=useState<Export|null>(null),[busy,setBusy]=useState(''),[error,setError]=useState(''),[attempt,setAttempt]=useState<Attempt|null>(null);
   const fetchRef=useRef(apiFetch),alive=useRef(true),inflight=useRef(false);fetchRef.current=apiFetch;
   const key='lanorange-price-export-attempt:'+workspaceId;
   const request=<T,>(route:string,body?:object)=>platformAuthRequest<T>(fetchRef.current,BASE+route,body,30000);
+  useEffect(()=>{
+    if(!focusId)return;
+    let disposed=false;
+    void request<Export>(`/exports/${encodeURIComponent(focusId)}`).then(value=>{if(!disposed){setJob(value);document.getElementById('price-record-result')?.scrollIntoView({block:'start'});}}).catch(err=>{if(!disposed)setError(err instanceof Error?err.message:'指定记录读取失败');});
+    return()=>{disposed=true;};
+  },[focusId,workspaceId]);
   function save(value:Attempt|null){setAttempt(value);try{if(value)sessionStorage.setItem(key,JSON.stringify(value));else sessionStorage.removeItem(key);}catch{}}
-  async function refresh(){try{const result=await request<{exports:Export[]}>('/exports');if(!alive.current)return;setHistory(result.exports);setJob(old=>result.exports.find(j=>j.id===old?.id)||result.exports[0]||null);onActiveCount(result.exports.filter(j=>ACTIVE.has(j.status)).length);}catch(err){if(alive.current)setError(err instanceof Error?err.message:'读取导出记录失败');}}
+  async function refresh(){try{const result=await request<{exports:Export[]}>('/exports');if(!alive.current)return;setHistory(result.exports);setJob(old=>result.exports.find(j=>j.id===old?.id)||old||result.exports[0]||null);onActiveCount(result.exports.filter(j=>ACTIVE.has(j.status)).length);}catch(err){if(alive.current)setError(err instanceof Error?err.message:'读取导出记录失败');}}
   useEffect(()=>{alive.current=true;try{const old=JSON.parse(sessionStorage.getItem(key)||'null');if(old?.request_id&&old?.query){setAttempt(old);setQuery(old.query);}}catch{}void refresh();const timer=setInterval(()=>void refresh(),4000);return()=>{alive.current=false;clearInterval(timer);};},[workspaceId]);
   async function perform(kind:string,fn:()=>Promise<void>){if(inflight.current)return;inflight.current=true;setBusy(kind);setError('');try{await fn();}catch(err){if(alive.current)setError(err instanceof Error?err.message:'操作未完成');}finally{inflight.current=false;if(alive.current)setBusy('');}}
   async function start(event:React.FormEvent){event.preventDefault();await perform('start',async()=>{
@@ -35,11 +42,11 @@ export function LanorangePriceExports({apiFetch,workspaceId,onActiveCount,onSwit
     {error && <p className="wb-error" role="alert">{error}</p>}
     {attempt && <div className="wb-approval-notice">本次导出提交尚未确认，请先查找已有任务。<button className="wb-button" disabled={!!busy} onClick={()=>void find()}>查找本次导出</button></div>}
     <p className="wb-muted">主表：结算模式、日期、城市名称、片区名称、站点名称、骑手姓名、身份证号、价格。版本及跳过、失败原因记录在“采集记录”中。</p>
-  </section><section className="wb-approval-card"><div className="wb-approval-heading"><h2>导出记录</h2><button className="wb-button" disabled={!!busy} onClick={()=>void refresh()}>刷新导出记录</button></div>
-    {!job?<p className="wb-muted">暂无导出任务。</p>:<><label className="wb-approval-history">查看导出<select className="wb-select" value={job.id} onChange={e=>setJob(history.find(j=>j.id===e.target.value)||null)}>{history.map(j=><option key={j.id} value={j.id}>{j.query.month} · {new Date(j.created*1000).toLocaleString('zh-CN')} · {labels[j.status]||j.status}</option>)}</select></label>
-      <div className="wb-approval-toolbar"><div><strong>{labels[job.status]||job.status}</strong><p>{job.message}</p><p className="wb-muted">已处理{job.completed}/{job.total}个站点周期 · 已生成{job.rows}行</p></div><div className="wb-row">{ACTIVE.has(job.status)&&<button className="wb-button" disabled={!!busy || job.status==='stopping'} onClick={()=>void perform('stop',async()=>{setJob(await request<Export>(`/exports/${job.id}/stop`,{}));})}>停止后续采集</button>}{['completed','partial'].includes(job.status)&&<button className="wb-primary" disabled={!!busy} onClick={()=>void download()}>下载 Excel</button>}</div></div>
+  </section><section className="wb-approval-card" id="price-record-result"><div className="wb-approval-heading"><h2>导出结果</h2><button className="wb-button" disabled={!!busy} onClick={()=>void refresh()}>刷新导出记录</button></div>
+    {!job?<p className="wb-muted">暂无导出任务。</p>:<><TaskOutcome task={{status:job.status,kind:'price-export',availableFiles:['completed','partial'].includes(job.status)?1:0}}/><label className="wb-approval-history">查看导出<select className="wb-select" value={job.id} onChange={e=>setJob(history.find(j=>j.id===e.target.value)||null)}>{job&&!history.some(j=>j.id===job.id)&&<option value={job.id}>{job.query.month} · 当前任务</option>}{history.map(j=><option key={j.id} value={j.id}>{j.query.month} · {new Date(j.created*1000).toLocaleString('zh-CN')} · {labels[j.status]||j.status}</option>)}</select></label>
+      <div className="wb-approval-toolbar"><div><p>{job.message}</p><p className="wb-muted">已处理{job.completed}/{job.total}个站点周期 · 已生成{job.rows}行</p></div><div className="wb-row">{ACTIVE.has(job.status)&&<button className="wb-button" disabled={!!busy || job.status==='stopping'} onClick={()=>void perform('stop',async()=>{setJob(await request<Export>(`/exports/${job.id}/stop`,{}));})}>停止后续采集</button>}{['completed','partial'].includes(job.status)&&<button className="wb-primary" disabled={!!busy} onClick={()=>void download()}>下载 Excel</button>}</div></div>
       {job.status==='partial' && <p className="wb-error">部分站点未导出，请按下方失败原因单独筛选处理；当前文件含已成功读取的数据和完整采集记录。</p>}
-      <div className="wb-approval-table"><table><thead><tr><th>城市 / 站点</th><th>结算周期</th><th>最新版本</th><th>状态</th><th>行数</th><th>结果 / 原因</th></tr></thead><tbody>{job.receipts.map((r,index)=><tr key={index}><td>{r.city}<small>{r.station}</small></td><td>{r.period}</td><td>{r.version || '—'}</td><td>{r.status || '—'}</td><td>{r.row_count}</td><td className={r.result==='失败'?'wb-error':''}>{r.result}<small>{r.message}</small></td></tr>)}</tbody></table></div>
+      <details className="wb-receipts" key={job.id} open={['partial','failed','interrupted'].includes(job.status)}><summary>采集明细与版本（{job.receipts.length} 条）</summary><div className="wb-approval-table"><table><thead><tr><th>城市 / 站点</th><th>结算周期</th><th>最新版本</th><th>状态</th><th>行数</th><th>结果 / 原因</th></tr></thead><tbody>{job.receipts.map((r,index)=><tr key={index}><td>{r.city}<small>{r.station}</small></td><td>{r.period}</td><td>{r.version || '—'}</td><td>{r.status || '—'}</td><td>{r.row_count}</td><td className={r.result==='失败'?'wb-error':''}>{r.result}<small>{r.message}</small></td></tr>)}</tbody></table></div></details>
     </>}
   </section></div>;
 }

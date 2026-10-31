@@ -11,7 +11,7 @@ _cache = {}
 TTL = 120
 
 
-def load_options(api):
+def load_directory(api):
     cities = api._get('base/baseCity/queryList').get('data')
     stations = api._get('base/baseSite/queryList', {'status': 0}).get('data')
     if not isinstance(cities, list) or not isinstance(stations, list) or len(cities)>1000 or len(stations)>20000:
@@ -28,7 +28,13 @@ def load_options(api):
         key=identifier(row.get('id'));city_id=identifier(row.get('cityId'))
         # No unscoped/no-permission endpoint, fabricated city, or silent relabel.
         if city_id not in city_names:continue
-        sites[key]={'id':key,'name':row['siteName'],'city':city_names[city_id]}
+        sites[key]={'id':key,'name':row['siteName'],'city':city_names[city_id], 'city_id':city_id}
+    return {'cities': sorted(set(city_names.values())),
+            'stations': sorted(sites.values(), key=lambda row:(row['city'],row['name'],row['id']))}
+
+
+def load_options(api):
+    directory = load_directory(api)
     months=set();seen=set();expected=None
     # Read list metadata only, never rider details or export/approval endpoints.
     for page in range(1,22):
@@ -48,9 +54,7 @@ def load_options(api):
         if len(seen)==total:break
         if not rows or len(seen)>total:raise ApprovalError('蓝橙业务目录分页不完整，请重新加载')
     else:raise ApprovalError('蓝橙业务目录分页不完整，请重新加载')
-    return {'cities':sorted(set(city_names.values())),
-            'stations':sorted(sites.values(),key=lambda row:(row['city'],row['name'],row['id'])),
-            'months':sorted(months,reverse=True),'actor_label':api.actor_label}
+    return {**directory, 'months':sorted(months,reverse=True),'actor_label':api.actor_label}
 
 
 def options(owner,refresh=False,*,factory=OfficialApprovalClient,version_fn=None):

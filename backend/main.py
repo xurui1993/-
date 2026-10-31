@@ -666,83 +666,6 @@ async def action_file(request: Request):
 
 from fastapi.responses import FileResponse
 
-def ensure_template_exists(template_path):
-    is_valid = False
-    if os.path.exists(template_path):
-        try:
-            import zipfile
-            with zipfile.ZipFile(template_path, 'r') as zf:
-                if 'xl/workbook.xml' in zf.namelist():
-                    is_valid = True
-        except Exception:
-            is_valid = False
-
-    if not is_valid:
-        os.makedirs(os.path.dirname(template_path), exist_ok=True)
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        from openpyxl.utils import get_column_letter
-
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = '申请名单'
-
-        headers = [
-            '团队名称', '骑手ID', '骑手姓名', '开始日期', '结束日期', '周期类型', '城市', '防重拦截', '跨站合并'
-        ]
-
-        sample_data = [
-            ['浦东耀华站', '100234', '张三', '2026-07-01', '2026-07-15', '半月结', '上海', '是', '否'],
-            ['浦东耀华站', '100235', '李四', '2026-07-01', '2026-07-15', '半月结', '上海', '是', '否'],
-            ['西湖网格站', '100236', '王五', '2026-07-01', '2026-07-15', '半月结', '杭州', '是', '否'],
-        ]
-
-        ws.append(headers)
-        for row in sample_data:
-            ws.append(row)
-
-        header_fill = PatternFill(start_color='1F497D', end_color='1F497D', fill_type='solid')
-        header_font = Font(name='微软雅黑', size=11, bold=True, color='FFFFFF')
-        data_font = Font(name='微软雅黑', size=10, color='000000')
-
-        thin_border = Border(
-            left=Side(style='thin', color='D9D9D9'),
-            right=Side(style='thin', color='D9D9D9'),
-            top=Side(style='thin', color='D9D9D9'),
-            bottom=Side(style='thin', color='D9D9D9')
-        )
-
-        header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        data_alignment = Alignment(horizontal='center', vertical='center')
-
-        ws.row_dimensions[1].height = 28
-
-        for cell in ws[1]:
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = header_alignment
-            cell.border = thin_border
-
-        for row in ws.iter_rows(min_row=2, max_row=len(sample_data)+1, min_col=1, max_col=len(headers)):
-            ws.row_dimensions[row[0].row].height = 22
-            for cell in row:
-                cell.font = data_font
-                cell.alignment = data_alignment
-                cell.border = thin_border
-
-        for col in ws.columns:
-            max_len = 0
-            col_letter = get_column_letter(col[0].column)
-            for cell in col:
-                val_str = str(cell.value or '')
-                width = sum(2 if ord(c) > 127 else 1 for c in val_str)
-                if width > max_len:
-                    max_len = width
-            ws.column_dimensions[col_letter].width = max(max_len + 5, 14)
-
-        ws.views.sheetView[0].showGridLines = True
-        wb.save(template_path)
-
 def get_project_root():
     import sys
     if getattr(sys, 'frozen', False):
@@ -752,71 +675,24 @@ def get_project_root():
         current_file_dir = os.path.dirname(os.path.abspath(__file__))
         return os.path.dirname(current_file_dir) if os.path.basename(current_file_dir) == 'backend' else current_file_dir
 
-RETIRED_TEMPLATES = {"异常骑手跟进模板.xlsx"}
-
-
 @app.get("/api/templates/list")
 async def list_templates():
-    project_root = get_project_root()
-    tpl_dir = os.path.join(project_root, "system_templates")
-    os.makedirs(tpl_dir, exist_ok=True)
+    from template_library import listing
+    return await asyncio.to_thread(listing, get_project_root())
 
-    # Check existing valid template files in system_templates
-    valid_extensions = ('.xlsx', '.xls', '.csv')
-    existing_files = [
-        f for f in sorted(os.listdir(tpl_dir))
-        if f.endswith(valid_extensions) and not f.startswith('~$') and not f.startswith('.') and f not in RETIRED_TEMPLATES
-    ]
-
-    # If completely empty, generate default template
-    if not existing_files:
-        default_tpl = os.path.join(tpl_dir, "template.xlsx")
-        ensure_template_exists(default_tpl)
-        existing_files = [os.path.basename(default_tpl)]
-
-    templates = []
-    for f in existing_files:
-        fpath = os.path.join(tpl_dir, f)
-        if os.path.exists(fpath):
-            stat = os.stat(fpath)
-            templates.append({
-                "filename": f,
-                "size": stat.st_size,
-                "mtime": stat.st_mtime
-            })
-    return {"success": True, "templates": templates}
 
 @app.get("/api/download/template")
 async def download_template(file: str = ""):
-    project_root = get_project_root()
-    tpl_dir = os.path.join(project_root, "system_templates")
-    os.makedirs(tpl_dir, exist_ok=True)
+    from template_library import template_path, inspect_template, TemplateError
+    try:
+        target = template_path(get_project_root(), file)
+        await asyncio.to_thread(inspect_template, target)
+    except TemplateError as error:
+        raise HTTPException(error.status, str(error)) from None
+    return FileResponse(target, filename=file,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
-    if not file:
-        existing_files = [
-            f for f in sorted(os.listdir(tpl_dir))
-            if (f.endswith('.xlsx') or f.endswith('.xls') or f.endswith('.csv')) and not f.startswith('~$') and not f.startswith('.') and f not in RETIRED_TEMPLATES
-        ]
-        file = existing_files[0] if existing_files else "template.xlsx"
-
-    safe_filename = os.path.basename(file)
-    if safe_filename in RETIRED_TEMPLATES:
-        raise HTTPException(410, "异常骑手跟进已改为代码生成，请使用业务表生成入口")
-    target_path = os.path.join(tpl_dir, safe_filename)
-
-    if not os.path.exists(target_path):
-        # Fallback check in data directory
-        fallback_path = os.path.join(project_root, "data", safe_filename)
-        if os.path.exists(fallback_path):
-            target_path = fallback_path
-        else:
-            ensure_template_exists(target_path)
-
-    return FileResponse(
-        target_path,
-        filename=safe_filename,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
 
 @app.get("/api/download/config")
 async def download_config():

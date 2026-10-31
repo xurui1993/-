@@ -102,6 +102,16 @@ class AbnormalRidersTests(unittest.TestCase):
         return generate_abnormal_riders(batch, quit_file, report, leave, archive,
                                         self.root / 'out', log=self.logs.append, **options)
 
+    def test_station_snapshot_and_conflicting_manual_city_are_traceable(self):
+        from unittest.mock import patch
+        directory={'stations':[{'id':'0001','city_id':'010','name':'保定一站','city':'后台城市'}]}
+        with patch('abnormal_riders._team_city_catalog',return_value={'保定一站':'人工城市'}):
+            target=self.generate(station_directory=directory)
+        _,stations=sheet_rows(target,'站点城市目录')
+        self.assertEqual(stations[0]['站点编号'],'0001')
+        _,issues=sheet_rows(target,'城市归属待核对')
+        self.assertTrue(any(row['人工配置城市']=='人工城市' for row in issues))
+
     def test_abnormal_summary_orders_types_and_backfills_archive_fields(self):
         target = self.generate()
         header, rows = sheet_rows(target, '异常汇总')

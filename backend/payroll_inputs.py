@@ -480,6 +480,12 @@ async def run_payroll(config, request):
     if omitted:
         yield tasks.create_log_event('本次明确未提供：' + '、'.join(omitted), 'WARN')
     yield tasks.create_log_event(f"核算范围：{plan['city']} / {plan['start']} 至 {plan['end']} / {plan['applicants']} 条申请；各骑手仍按申请周期核算")
+    from payroll_review import application_summary, build_review, write_review
+    try:
+        application = await asyncio.to_thread(application_summary, inputs / plan['template'])
+    except Exception:
+        application = None
+        yield tasks.create_log_event('申请名单复核统计不可用，核算仍按原规则执行；请人工核对申请记录。', 'WARN')
     async for event in tasks.run_main_calculation_gen(plan['city'], plan['cycle'], str(inputs),
             config.basePath, config.theme, config.enableInterceptor, config.enableCrossStationMerge,
             deductionRules=state['deductions']['rows'], taskQueue=[plan['template']], strict_inputs=True,
@@ -496,10 +502,18 @@ async def run_payroll(config, request):
                 yield 'data: ' + json.dumps({'type': 'payroll_preparation', 'preparation': public(state)}, ensure_ascii=False) + '\n\n'
             elif result.get('type') == 'finish' and result.get('status') == 'success':
                 state['status'] = 'calculated'
-                state['result'] = {'output': result.get('out_file'), 'input_hashes_verified': True}
+                review = build_review(state, result.get('stats'), application)
+                result['review_summary'] = review
+                state['result'] = {'output': result.get('out_file'), 'input_hashes_verified': True, 'review_summary': review}
                 save(folder, state)
                 output = Path(result.get('out_file') or '')
                 if result.get('out_file') and output.is_dir():
+                    try:
+                        await asyncio.to_thread(write_review, output, review)
+                    except Exception:
+                        review['export_error'] = '复核清单导出未完成，请在批次页面查看摘要并复核原工作簿'
+                        save(folder, state)
+                        yield tasks.create_log_event(review['export_error'], 'WARN')
                     atomic_json(output / ('核算资料清单_' + state['id'][:8] + '.json'), state)
                 try:
                     destination=publish_result(wid,folder,state)
@@ -507,6 +521,7 @@ async def run_payroll(config, request):
                     event='data: '+json.dumps(result,ensure_ascii=False)+'\n\n'
                 except (OSError,ValueError,SourceError):
                     yield tasks.create_log_event('核算已完成，结果目录发布未完成；原结果已保留，可在任务中心重新领取。','WARN')
+                event='data: '+json.dumps(result,ensure_ascii=False)+'\n\n'
                 yield 'data: ' + json.dumps({'type': 'payroll_preparation', 'preparation': public(state)}, ensure_ascii=False) + '\n\n'
             elif result.get('type') == 'finish' and result.get('status') == 'error':
                 state['status'] = 'ready'

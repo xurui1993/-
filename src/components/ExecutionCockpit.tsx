@@ -79,18 +79,7 @@ export function ExecutionCockpit({
   onBack,
 }: ExecutionCockpitProps) {
   const [logExpanded, setLogExpanded] = useState(false);
-  const lastErrorSignature = useRef<string>('');
-
-  useEffect(() => {
-    if (logs.length === 0) return;
-    const last = logs[logs.length - 1];
-    if (last.level !== 'ERROR') return;
-    const signature = `${runKey}:${logs.length}:${last.text.slice(0, 40)}`;
-    if (lastErrorSignature.current !== signature) {
-      lastErrorSignature.current = signature;
-      setLogExpanded(true);
-    }
-  }, [logs, runKey]);
+  useEffect(() => { setLogExpanded(false); }, [runKey]);
 
   const subStarted = taskQueue.some(t => t.status !== 'pending');
   const allSubDone =
@@ -116,7 +105,7 @@ export function ExecutionCockpit({
 
   const doneCount = taskQueue.filter(t => t.status === 'completed').length;
   const errorCount = taskQueue.filter(t => t.status === 'error').length;
-  const recentLogs = logs.slice(-3);
+
 
   const statusBadge = paused ? (
     <span className="flex items-center gap-1.5 px-3 py-1 rounded-full border border-amber-200 bg-amber-50 text-amber-700 text-xs font-bold">
@@ -314,7 +303,7 @@ export function ExecutionCockpit({
               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold border border-slate-300 text-slate-700 bg-white hover:bg-slate-100"
             >
               {logExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-              完整日志
+              {logExpanded ? '收起技术日志' : `技术日志${errorCount ? ` · ${errorCount} 项异常` : ''}`}
             </button>
           </div>
         </div>
@@ -324,15 +313,7 @@ export function ExecutionCockpit({
             style={{ width: `${progress}%` }}
           />
         </div>
-        {!logExpanded && recentLogs.length > 0 && (
-          <div className="flex flex-col gap-0.5 font-mono text-[11px] text-slate-500 overflow-hidden">
-            {recentLogs.map((log, i) => (
-              <p key={i} className="truncate">
-                {log.text}
-              </p>
-            ))}
-          </div>
-        )}
+
       </div>
 
       {logExpanded && (

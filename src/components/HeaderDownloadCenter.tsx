@@ -1,3 +1,4 @@
+import { taskGuidance } from '../lib/taskGuidance';
 import React, { useEffect, useRef, useState } from 'react';
 import { Bell, ArrowUpRight } from 'lucide-react';
 
@@ -7,7 +8,7 @@ interface Props {
   onNavigateHistory:()=>void; onOpenPlatformAuth:(platformKey?:string)=>void;
   onShowToast?:(msg:string,type?:'info'|'success'|'warn'|'error')=>void;
 }
-const LABELS:Record<string,string>={queued:'排队中',running:'处理中',success:'已完成',partial:'部分完成',error:'未完成',interrupted:'已中断',cancelled:'已取消',waiting_login:'等待认证',waiting_manual:'等待验证',needs_review:'待核实',preparing:'准备资料中',waiting_materials:'待补资料',ready:'资料就绪',pending_download:'待准备资料'};
+
 
 /** A notification is a link to real work, never a second file-delivery system. */
 export function HeaderDownloadCenter({apiFetch,onNavigateHistory,runningTask,progressText}:Props) {
@@ -41,7 +42,7 @@ export function HeaderDownloadCenter({apiFetch,onNavigateHistory,runningTask,pro
       {runningTask&&<p className="wb-muted">{progressText||'当前操作正在执行'}</p>}
       {error&&<p role="status" className="wb-notice">{error}</p>}
       {!tasks.length&&!error&&<p className="tc-empty">暂无任务</p>}
-      {tasks.map(t=><button className="tc-notification-item" key={t.id} onClick={go}><span>{t.title}</span><small>{LABELS[t.status]||t.status}</small></button>)}
+      {tasks.map(t=><button className="tc-notification-item" key={t.id} onClick={go}><span>{t.title}</span><small>{taskGuidance({status:t.status}).label}</small></button>)}
     </section>}
   </div>;
 }
