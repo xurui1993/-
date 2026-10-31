@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { GENERATOR_IDS, isGenerator, inferTaskKind } from '../src/lib/taskCatalog';
+
+test('three generated tables are distinct from platform source datasets', () => {
+  assert.deepEqual(GENERATOR_IDS, ['payment_binding', 'abnormal_followup', 'abnormal_riders']);
+  assert.equal(isGenerator('lanorange_rider_archive'), false);
+  assert.equal(inferTaskKind(['delivery_fee', 'penalty']), 'download');
+  assert.equal(inferTaskKind(['abnormal_riders']), 'generate');
+  assert.equal(inferTaskKind(['delivery_fee', 'payment_binding']), 'generate');
+});

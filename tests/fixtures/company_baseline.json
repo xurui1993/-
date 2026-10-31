@@ -1,0 +1,8 @@
+{
+  "archive_name": "薪酬核算中心_源码包_20261016.zip",
+  "archive_sha256": "ef9b2e80627a815f6d675e0d47bfdae593f081425d346944fd6280c27d004ad0",
+  "company_processor_sha256": "799f0a3f7480c1232c33c2f13daf196a67df9970a9ed6f1c363cda5c88b6bde8",
+  "company_processor_ast_sha256": "1ae8411728dbf8b1f059613f198d37a900424c1ee6e0685aee39ecada5531b8d",
+  "parttime_processor_ast_sha256": "29248891c40295f14928e926c8d9e965a8d7a4c949b7054360fb763d1c8931f2",
+  "scope_note": "Original business baseline with only user-authorized full-time output branches removed; original hashes retained above."
+}

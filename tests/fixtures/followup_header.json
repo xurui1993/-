@@ -1,0 +1,418 @@
+{
+  "sheetnames": [
+    "说明",
+    "分析表",
+    "10月异常骑手跟进表",
+    "10月骑手绑定情况",
+    "10月骑手详情表",
+    "10月骑手信息表",
+    "10月风神薪资方案绑定",
+    "10月蓝橙价格档案",
+    "10月蓝橙员工档案",
+    "10月电动车住宿租用"
+  ],
+  "headers": [
+    "城市",
+    "团队名称",
+    "骑手ID",
+    "骑手姓名",
+    "骑手身份证",
+    "合作类型",
+    "状态",
+    "招聘来源",
+    "是否寒暑假工",
+    "兼职无单价报备骑手",
+    "发薪工具是否绑定",
+    "10月活跃天",
+    "10月完单量",
+    "10月最后出勤日",
+    "是否异常骑手",
+    "异常原因",
+    "内推已发",
+    "地推已发",
+    "新人奖已发",
+    "兼转全已发",
+    "租车天数",
+    "住宿天数",
+    "备注",
+    "薪资方案是否绑定",
+    "扣款方案是否绑定",
+    "是否需跟进城市维护",
+    "备注",
+    "城市是否维护",
+    "维护日期",
+    "备注",
+    "合作日期"
+  ],
+  "groups": [
+    [
+      "A1",
+      "“新专送”10月异常骑手跟进表"
+    ],
+    [
+      "A2",
+      "骑手信息"
+    ],
+    [
+      "Q2",
+      "已发奖励 （仅展示未满足考核需要扣回的金额）"
+    ],
+    [
+      "U2",
+      "风神扣款天数维护"
+    ],
+    [
+      "X2",
+      "风神扣款维护"
+    ],
+    [
+      "Z2",
+      "跟进动作（薪资组）"
+    ],
+    [
+      "AB2",
+      "闭环动作（城市操作，薪资组登记记录）"
+    ]
+  ],
+  "merges": [
+    "U2:W2",
+    "Z2:AA2",
+    "X2:Y2",
+    "Q2:T2",
+    "A1:AD1",
+    "A2:P2"
+  ],
+  "widths": {
+    "A": 4.75,
+    "B": 36.5,
+    "C": 12.875,
+    "D": 19.0,
+    "E": 20.5,
+    "F": 9.625,
+    "H": 15.875,
+    "I": 11.375,
+    "J": 16.75,
+    "K": 30.75,
+    "L": 10.0,
+    "N": 13.625,
+    "O": 11.375,
+    "P": 12.125,
+    "Q": 8.0,
+    "S": 9.625,
+    "U": 8.0,
+    "W": 25.75,
+    "X": 15.0,
+    "Z": 9.625,
+    "AA": 22.25,
+    "AB": 33.0,
+    "AC": 8.0,
+    "AD": 4.75,
+    "AE": 11.125
+  },
+  "styles": {
+    "A1": [
+      "FF00B0F0",
+      "FFFFFFFF",
+      18.0,
+      true,
+      false,
+      "General"
+    ],
+    "A2": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "Q2": [
+      "FFDAE3F3",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "U2": [
+      "FFE2F0D9",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "X2": [
+      "FFE2F0D9",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "Z2": [
+      "FFFFD966",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "AB2": [
+      "FF00B0F0",
+      "FFFFFFFF",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "A3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "B3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "C3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "0"
+    ],
+    "D3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "0"
+    ],
+    "E3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "F3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "G3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "H3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "I3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "J3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "K3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "L3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "M3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "N3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "mm-dd-yy"
+    ],
+    "O3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "P3": [
+      "FFFBE5D6",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "Q3": [
+      "FFDAE3F3",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "R3": [
+      "FFDAE3F3",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "S3": [
+      "FFDAE3F3",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "T3": [
+      "FFDAE3F3",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "U3": [
+      "FFE2F0D9",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "V3": [
+      "FFE2F0D9",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "W3": [
+      "FFFFD966",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "X3": [
+      "FFE2F0D9",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "Y3": [
+      "FFE2F0D9",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "Z3": [
+      "FFFFD966",
+      "FF000000",
+      10.0,
+      false,
+      true,
+      "General"
+    ],
+    "AA3": [
+      "FFFFD966",
+      "FF000000",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "AB3": [
+      "FF00B0F0",
+      "FFFFFFFF",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "AC3": [
+      "FF00B0F0",
+      "FFFFFFFF",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "AD3": [
+      "FF00B0F0",
+      "FFFFFFFF",
+      10.0,
+      false,
+      false,
+      "General"
+    ],
+    "AE3": [
+      "FFFFFF00",
+      "FFFF0000",
+      10.0,
+      true,
+      false,
+      "mm-dd-yy"
+    ]
+  }
+}

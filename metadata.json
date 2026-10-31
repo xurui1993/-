@@ -1,0 +1,6 @@
+{
+  "name": "薪酬工作台",
+  "description": "多平台骑手运单与薪资核算工作台，集成风神、蓝橙、小象灯塔与知了看板的数据拉取、价格匹配、扣款计算与发薪详单生成。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

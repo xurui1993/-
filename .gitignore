@@ -1,0 +1,15 @@
+node_modules/
+.venv/
+dist/
+runtime/
+data/
+uploads/
+outputs/
+.local_auth/
+backend/.local_auth/
+backend/.local_downloads/
+**/__pycache__/
+*.pyc
+.env
+gateway/template.zip
+*.part

@@ -1,0 +1,16 @@
+{
+  "historical_reference_sha256": "0fa52de2a560dddc4a1db7638407421c86985878f0a3265c45dcf845374324e3",
+  "sheet": "配送单",
+  "column_header": "Temp_Col_13",
+  "addresses": [
+    "N2",
+    "N3",
+    "N4",
+    "N5",
+    "N6",
+    "N7"
+  ],
+  "old_reference_value": "nan",
+  "correct_semantics": "blank, not zero or text nan",
+  "source_evidence": "Two synthetic daily input workbooks each have exactly four real columns; N is generated padding. Amounts, IDs and all named fields remain compared unchanged."
+}

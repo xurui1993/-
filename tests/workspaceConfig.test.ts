@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { readWorkspaceConfig, writeWorkspaceConfig, workspaceConfigFile } from '../server/workspaceConfig';
+
+test('workspace settings read legacy files and write isolated central configuration', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-config-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const original = { city: '测试城', sourcePath: '原始资料', extra: '00123' };
+  fs.writeFileSync(path.join(root, '.aegis_config_tester.json'), JSON.stringify(original));
+  assert.deepEqual(readWorkspaceConfig(root, 'tester'), original);
+  writeWorkspaceConfig(root, 'tester', { ...original, city: '新选择' });
+  assert.equal((readWorkspaceConfig(root, 'tester') as any).city, '新选择');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.aegis_config_tester.json'), 'utf8')), original);
+  assert.deepEqual(readWorkspaceConfig(root, 'other'), {});
+  assert.throws(() => workspaceConfigFile(root, '../outside'), /无效/);
+  assert.throws(() => workspaceConfigFile(root, 'C:\\outside'), /无效/);
+});
