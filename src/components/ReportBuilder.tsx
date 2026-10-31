@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, FileSpreadsheet, RefreshCw, Search } from 'lucide-react';
 import { monthBounds, reportRange, type ReportDefinition } from '../lib/reportBuilder';
+import { WorkbenchDatePicker } from './WorkbenchDatePicker';
 
 interface City { id:string; name:string; disabled?:boolean; note?:string }
 interface Props {
@@ -72,7 +73,7 @@ export function ReportBuilder(props:Props) {
             </div>
             <div className="rb-field rb-period-field">
               <div className="rb-label-row"><label>{report.scope==='city_month'?'业务月份':'业务日期'}</label>{report.scope==='city_month'&&<span><button type="button" disabled={locked} onClick={()=>quickMonth(-1)}>上月</button><button type="button" disabled={locked} onClick={()=>quickMonth(0)}>本月</button></span>}</div>
-              <div className="rb-period-inputs"><label><span className="sr-only">{report.scope==='city_month'?'开始月份':'开始日期'}</span><input aria-label={report.scope==='city_month'?'报表开始月份':'报表开始日期'} max={report.scope==='city_month'?props.today.slice(0,7):props.today} type={report.scope==='city_month'?'month':'date'} value={report.scope==='city_month'?props.start.slice(0,7):props.start} disabled={locked} onChange={e=>report.scope==='city_month'?chooseMonth(e.target.value,true):props.onStart(e.target.value)}/></label><span>至</span><label><span className="sr-only">{report.scope==='city_month'?'结束月份':'结束日期'}</span><input aria-label={report.scope==='city_month'?'报表结束月份':'报表结束日期'} max={report.scope==='city_month'?props.today.slice(0,7):props.today} type={report.scope==='city_month'?'month':'date'} value={report.scope==='city_month'?props.end.slice(0,7):props.end} disabled={locked} onChange={e=>report.scope==='city_month'?chooseMonth(e.target.value,false):props.onEnd(e.target.value)}/></label></div>
+              <div className="rb-period-inputs"><div><span className="sr-only">{report.scope==='city_month'?'开始月份':'开始日期'}</span><WorkbenchDatePicker ariaLabel={report.scope==='city_month'?'报表开始月份':'报表开始日期'} mode={report.scope==='city_month'?'month':'date'} max={report.scope==='city_month'?props.today.slice(0,7):props.today} value={report.scope==='city_month'?props.start.slice(0,7):props.start} rangeRole="start" rangeStart={props.start} rangeEnd={props.end} today={props.today} disabled={locked} onChange={val=>report.scope==='city_month'?chooseMonth(val,true):props.onStart(val)}/></div><span>至</span><div><span className="sr-only">{report.scope==='city_month'?'结束月份':'结束日期'}</span><WorkbenchDatePicker ariaLabel={report.scope==='city_month'?'报表结束月份':'报表结束日期'} mode={report.scope==='city_month'?'month':'date'} max={report.scope==='city_month'?props.today.slice(0,7):props.today} value={report.scope==='city_month'?props.end.slice(0,7):props.end} rangeRole="end" rangeStart={props.start} rangeEnd={props.end} today={props.today} align="right" disabled={locked} onChange={val=>report.scope==='city_month'?chooseMonth(val,false):props.onEnd(val)}/></div></div>
               {range&&report.scope==='city_month'&&<small className="rb-muted">{range.start} 至 {range.end} · 按月份生成</small>}
               {!range&&<small role="alert" className="rb-invalid">开始时间不能晚于结束时间，请填写有效范围。</small>}
             </div>

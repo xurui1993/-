@@ -23,6 +23,12 @@ import {
   toggleNotificationFilterTab,
   getStageHeaderMeta,
   getPlatformCardBadge,
+  getDatasetCardMeta,
+  buildCalendarMonthGrid,
+  buildCalendarYearMonths,
+  formatDateTriggerMeta,
+  computeDateRangeSpanDays,
+  buildExecutionRailSummary,
 } from '../src/lib/workbench';
 import { DOWNLOAD_PLATFORMS } from '../src/lib/downloadModules';
 
@@ -278,7 +284,165 @@ test('Scheme A platform card badge computes ready, warn, busy, and idle states',
   assert.deepEqual(getPlatformCardBadge({ offline: true }), { label: '连接不可用', tone: 'idle' });
 });
 
+test('getDatasetCardMeta provides scopeTag, tone, and business description for datasets across all 4 systems', () => {
+  const delivery = getDatasetCardMeta('delivery_fee', '配送费');
+  assert.equal(delivery.scopeTag, '城市·账期');
+  assert.equal(delivery.tone, 'city');
+  assert.ok(delivery.desc.length >= 8);
 
+  const monthly = getDatasetCardMeta('rider_monthly', '风神骑手月度 UB 账单');
+  assert.equal(monthly.scopeTag, '城市·按月');
+  assert.equal(monthly.tone, 'monthly');
 
+  const merchant = getDatasetCardMeta('invitation_records', '邀请记录（全量）');
+  assert.equal(merchant.scopeTag, '商家·全量');
+  assert.equal(merchant.tone, 'merchant');
 
+  const lanorange = getDatasetCardMeta('lanorange_rider_archive', '骑手档案');
+  assert.equal(lanorange.scopeTag, '全城·全量');
+  assert.equal(lanorange.tone, 'full');
+
+  const baize = getDatasetCardMeta('baize_employees', '白泽员工资料（全量）');
+  assert.equal(baize.title, '商翼员工资料（全量）');
+  assert.equal(baize.scopeTag, '全站·全量');
+  assert.equal(baize.tone, 'full');
+
+  const xiaoxiang = getDatasetCardMeta('rider_daily', '日维度骑手分析（小象灯塔）');
+  assert.equal(xiaoxiang.title, '日维度骑手分析');
+  assert.equal(xiaoxiang.scopeTag, '全城·日期');
+  assert.equal(xiaoxiang.tone, 'lighthouse');
+});
+
+test('buildCalendarMonthGrid and datepicker helpers compute 42 Monday-first cells, range states, and weekday tags', () => {
+  // October 2026: Oct 1 is Thursday -> grid starts on Monday 2026-09-28
+  const grid = buildCalendarMonthGrid(2026, 10, {
+    selectedDate: '2026-10-01',
+    todayDate: '2026-10-31',
+    rangeStart: '2026-10-01',
+    rangeEnd: '2026-10-15',
+    minDate: '2026-08-01',
+    maxDate: '2026-10-30',
+  });
+  assert.equal(grid.length, 42);
+  assert.equal(grid[0].dateStr, '2026-09-28');
+  assert.equal(grid[0].inCurrentMonth, false);
+
+  const oct1 = grid.find(c => c.dateStr === '2026-10-01')!;
+  assert.equal(oct1.inCurrentMonth, true);
+  assert.equal(oct1.isSelected, true);
+  assert.equal(oct1.isRangeStart, true);
+  assert.equal(oct1.isInRange, true);
+
+  const oct10 = grid.find(c => c.dateStr === '2026-10-10')!;
+  assert.equal(oct10.isInRange, true);
+  assert.equal(oct10.isWeekend, true);
+
+  const oct31 = grid.find(c => c.dateStr === '2026-10-31')!;
+  assert.equal(oct31.isToday, true);
+  assert.equal(oct31.isDisabled, true);
+
+  const months = buildCalendarYearMonths(2026, {
+    selectedMonth: '2026-09',
+    todayMonth: '2026-10',
+    rangeStartMonth: '2026-08',
+    rangeEndMonth: '2026-10',
+    maxMonth: '2026-10',
+  });
+  assert.equal(months.length, 12);
+  assert.equal(months[8].isSelected, true);
+  assert.equal(months[9].isCurrentMonth, true);
+  assert.equal(months[10].isDisabled, true);
+
+  assert.deepEqual(formatDateTriggerMeta('2026-10-01', 'date'), {
+    primaryText: '2026-10-01',
+    badgeText: '周四',
+    isEmpty: false,
+  });
+  assert.deepEqual(formatDateTriggerMeta('2026-10', 'month'), {
+    primaryText: '2026年10月',
+    badgeText: '10月',
+    isEmpty: false,
+  });
+  assert.equal(computeDateRangeSpanDays('2026-10-01', '2026-10-31'), 31);
+});
+
+test('buildExecutionRailSummary formats scope rows without duplicate date hints when ready', () => {
+  const xiaoxiangReady = buildExecutionRailSummary({
+    datasetsCount: 1,
+    cities: [],
+    start: '2026-10-01',
+    end: '2026-10-30',
+    noCity: true,
+    noDate: false,
+    archiveOnly: false,
+    xiaoxiangDated: true,
+    xiaoxiangOnly: true,
+    blueOnly: false,
+    baizeOnly: false,
+    merchantOnly: false,
+    merchantSnapshotOnly: false,
+    merchantDateValid: true,
+    validDates: true,
+    includeSeparation: false,
+    subitemCount: 1,
+    submitReady: true,
+  });
+  assert.equal(xiaoxiangReady.cityLabel, '可访问全部城市');
+  assert.equal(xiaoxiangReady.periodText, '2026-10-01 ~ 10-30');
+  assert.equal(xiaoxiangReady.periodSpanBadge, '共 30 天');
+  assert.equal(xiaoxiangReady.thirdRowLabel, '交付规格');
+  assert.equal(xiaoxiangReady.thirdRowValue, '按账期合并导出');
+  assert.equal(xiaoxiangReady.blockerHint, '');
+
+  const fengshenMulti = buildExecutionRailSummary({
+    datasetsCount: 9,
+    cities: ['上海', '广州', '宁波', '深圳', '杭州', '苏州', '南京', '温州', '嘉兴', '金华'],
+    start: '2026-09-16',
+    end: '2026-09-30',
+    noCity: false,
+    noDate: false,
+    archiveOnly: false,
+    xiaoxiangDated: false,
+    xiaoxiangOnly: false,
+    blueOnly: false,
+    baizeOnly: false,
+    merchantOnly: false,
+    merchantSnapshotOnly: false,
+    merchantDateValid: true,
+    validDates: true,
+    includeSeparation: false,
+    subitemCount: 90,
+    submitReady: true,
+  });
+  assert.equal(fengshenMulti.cityLabel, '上海、广州、宁波 等 10 城');
+  assert.equal(fengshenMulti.periodText, '2026-09-16 ~ 09-30');
+  assert.equal(fengshenMulti.periodSpanBadge, '共 15 天');
+  assert.equal(fengshenMulti.thirdRowLabel, '站点规则');
+  assert.equal(fengshenMulti.thirdRowValue, '排除取分离');
+  assert.equal(fengshenMulti.listFooterText, '已选 9 类资料 · 预计 90 个采集子项');
+  assert.equal(fengshenMulti.blockerHint, '');
+
+  const unready = buildExecutionRailSummary({
+    ...fengshenMulti,
+    datasetsCount: 0,
+    cities: ['上海'],
+    start: '2026-09-16',
+    end: '2026-09-30',
+    noCity: false,
+    noDate: false,
+    archiveOnly: false,
+    xiaoxiangDated: false,
+    xiaoxiangOnly: false,
+    blueOnly: false,
+    baizeOnly: false,
+    merchantOnly: false,
+    merchantSnapshotOnly: false,
+    merchantDateValid: true,
+    validDates: true,
+    includeSeparation: false,
+    subitemCount: 0,
+    submitReady: false,
+  });
+  assert.equal(unready.blockerHint, '请先在左侧勾选需要采集的资料');
+});
 

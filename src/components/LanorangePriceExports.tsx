@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {LanorangePriceFilters} from './LanorangePriceFilters';
+import {WorkbenchDatePicker} from './WorkbenchDatePicker';
 import {platformAuthRequest,PlatformAuthError} from '../lib/platformAuthApi';
 type Query={month:string;city:string;station:string;date_from:string;date_to:string};
 type Export={id:string;request_id:string;status:string;created:number;message:string;completed:number;total:number;rows:number;query:Query;receipts:{city:string;station:string;period:string;version:string;status:string;row_count:number;result:string;message:string}[]};
@@ -28,7 +29,7 @@ export function LanorangePriceExports({apiFetch,workspaceId,onActiveCount,onSwit
   return <div className="wb-approvals"><section className="wb-approval-card"><div className="wb-approval-heading"><div className="wb-stage-heading-left"><div className="wb-stage-title-row"><h2>待审每日价格导出</h2>{onSwitchView && <nav className="wb-module-tabs wb-stage-tabs" aria-label="蓝橙价格管理功能"><button type="button" aria-pressed={false} className="wb-button" onClick={()=>onSwitchView('approval')}>批量审批</button><button type="button" aria-pressed={true} className="wb-button" onClick={()=>onSwitchView('price-export')}>待审每日价格导出</button></nav>}</div><p className="wb-muted">读取蓝橙业务列表中有权限的站点，按“骑手 × 日期”纵向生成 Excel。</p></div></div>
     <form onSubmit={start}>
       <div className="wb-approval-filters"><LanorangePriceFilters apiFetch={apiFetch} workspaceId={workspaceId} city={query.city} station={query.station} month={query.month} requiredMonth disabled={!!attempt || !!busy} onChange={value=>setQuery({...query,...value})}/></div>
-      <details className="wb-price-date-filter"><summary>限定导出日期（可选）</summary><div className="wb-approval-filters"><label>开始日期<input className="wb-input" type="date" value={query.date_from} disabled={!!attempt} onChange={e=>setQuery({...query,date_from:e.target.value})}/></label><label>结束日期<input className="wb-input" type="date" value={query.date_to} disabled={!!attempt} onChange={e=>setQuery({...query,date_to:e.target.value})}/></label></div></details>
+      <details className="wb-price-date-filter"><summary>限定导出日期（可选）</summary><div className="wb-approval-filters"><div className="wb-approval-filter-item"><span>开始日期</span><WorkbenchDatePicker ariaLabel="限定导出开始日期" value={query.date_from} rangeRole="start" rangeStart={query.date_from} rangeEnd={query.date_to} allowClear disabled={!!attempt} onChange={v=>setQuery({...query,date_from:v})}/></div><div className="wb-approval-filter-item"><span>结束日期</span><WorkbenchDatePicker ariaLabel="限定导出结束日期" value={query.date_to} rangeRole="end" rangeStart={query.date_from} rangeEnd={query.date_to} allowClear disabled={!!attempt} onChange={v=>setQuery({...query,date_to:v})}/></div></div></details>
       <div className="wb-approval-toolbar"><span>状态：审批中、待审核；仅取最新版本。0保留，空价格留空。</span><button className="wb-primary" disabled={!!busy || active || (!attempt && !query.month)}>{busy==='start'?'正在创建导出…':attempt?'使用原标识再次发起':'开始导出'}</button></div>
     </form>
     {error && <p className="wb-error" role="alert">{error}</p>}

@@ -14,9 +14,12 @@ import { ReportBuilder } from './ReportBuilder';
 import { reportRange, type ReportDefinition } from '../lib/reportBuilder';
 import { isGenerator, inferTaskKind, registerGeneratorIds } from '../lib/taskCatalog';
 import { DOWNLOAD_PLATFORMS,moduleAcceptsDataset,type DownloadPlatform,type RecordModule } from '../lib/downloadModules';
+import { WorkbenchDatePicker } from './WorkbenchDatePicker';
 import {
   BUILTIN_DOWNLOAD_SCENARIOS,
+  buildExecutionRailSummary,
   computeBillingPeriodRange,
+  getDatasetCardMeta,
   getStageHeaderMeta,
   SYSTEM_META,
   type BillingPeriodPreset,
@@ -766,6 +769,26 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
     : !validDates ? '开始日期不能晚于结束日期'
     : `${cities.length} 个城市 · ${datasets.length} 类资料 · 共 ${subitemCount} 项`;
   const submitReady = !!uncertainCreate || canSubmit;
+  const railSummary = buildExecutionRailSummary({
+    datasetsCount: datasets.length,
+    cities,
+    start,
+    end,
+    noCity,
+    noDate,
+    archiveOnly,
+    xiaoxiangDated,
+    xiaoxiangOnly,
+    blueOnly,
+    baizeOnly,
+    merchantOnly,
+    merchantSnapshotOnly,
+    merchantDateValid,
+    validDates,
+    includeSeparation,
+    subitemCount,
+    submitReady,
+  });
   const elapsed = (since?: string) => { const seconds = Math.max(0, Math.floor((now - new Date(since || "").getTime()) / 1000)); return Number.isFinite(seconds) ? seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : ""; };
   const progress = Math.max(0, Math.min(100, Number(selectedRun?.progress) || 0));
   const summaryDetail = selectedRun?.summary_progress;
@@ -814,7 +837,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
           <>
             {view === 'create' && <>
               <section className={taskKind === 'generate' ? 'rb-shell' : `${panel} wb-task-form wb-download-workbench`} aria-label={taskKind === 'generate' ? '业务报表配置' : '新建下载配置'}>
-                {taskKind === 'download' && <div className="wb-form-heading">
+                {taskKind === 'download' && !embedded && <div className="wb-form-heading">
                   <div className="wb-stage-heading-left">
                     <div className="wb-stage-title-row">
                       <h2>{stageMeta.title}</h2>
@@ -840,9 +863,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                 refreshing={optionsLoading} onRefreshCities={() => setOptionVersion(value => value + 1)}
               />}
               {taskKind === 'download' && <>
-              <div className="wb-download-main space-y-5 p-4 sm:p-6">
-                {taskKind === 'download' && <>
-                {!platform&&<div className="wb-system-overview-bar" role="group" aria-label="四大系统数据源切换">
+              <div className="wb-download-main">
+                {!platform && <div className="wb-system-overview-bar mb-4" role="group" aria-label="四大系统数据源切换">
                   <div className="wb-row">
                     <button
                       type="button"
@@ -885,16 +907,48 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                     })}
                   </div>
                 </div>}
+
+                {noCity && noDate && (
+                  <section aria-label="全量采集范围说明" className="wb-step-card wb-step-card-fullscope">
+                    <div className="wb-step-card-header">
+                      <div className="wb-step-badge">
+                        <span className="wb-step-number">01</span>
+                        <span className="wb-step-title">采集范围与账期</span>
+                        <span className="wb-fullscope-pill">全量自动覆盖 · 无需手动筛选</span>
+                      </div>
+                      <span className="wb-step-hint">
+                        {platform === 'baize' ? '商翼系统全量直连模式' : '蓝橙系统全量快照模式'}
+                      </span>
+                    </div>
+                    <div className="wb-fullscope-grid">
+                      <div className="wb-fullscope-stat">
+                        <span className="wb-metric-label">处理城市与站点</span>
+                        <strong className="wb-metric-value">
+                          {platform === 'baize' ? '全部站点（商翼全量）' : '全部授权城市（全量）'}
+                        </strong>
+                      </div>
+                      <div className="wb-fullscope-stat">
+                        <span className="wb-metric-label">业务核算账期</span>
+                        <strong className="wb-metric-value">全量历史无限制（实时快照）</strong>
+                      </div>
+                      <div className="wb-fullscope-stat">
+                        <span className="wb-metric-label">产出交付规格</span>
+                        <strong className="wb-metric-value">
+                          {platform === 'baize' ? '单份全量员工原表（独立归档）' : '每类资料自动生成 1 份汇总原表'}
+                        </strong>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
                 {!noCity && (
-                  <fieldset aria-labelledby="download-cities-label" className="wb-scope-section wb-inline-city-section">
-                    <div className="wb-inline-city-header">
-                      <div className="wb-section-step-header">
-                        <span className="wb-step-badge">01</span>
-                        <div className="wb-inline-city-title-row">
-                          <span id="download-cities-label" className="wb-section-label">处理城市</span>
-                          <span className="wb-city-count-badge">已选 {cities.length} / {selectableCities.length}</span>
-                          {optionsLoading && <span className="text-xs text-sky-600 flex items-center gap-1"><Loader2 size={12} className="animate-spin" />同步中</span>}
-                        </div>
+                  <fieldset aria-labelledby="download-cities-label" className="wb-step-card">
+                    <div className="wb-step-card-header">
+                      <div className="wb-step-badge">
+                        <span className="wb-step-number">01</span>
+                        <span id="download-cities-label" className="wb-step-title">处理城市</span>
+                        <span className="wb-step-count-pill">已选 {cities.length} / {selectableCities.length}</span>
+                        {optionsLoading && <span className="text-xs text-sky-600 flex items-center gap-1"><Loader2 size={12} className="animate-spin" />同步中</span>}
                       </div>
 
                       <div className="wb-inline-city-toolbar">
@@ -934,17 +988,22 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                       })}
                     </div>
                     {!selectableCities.length && (
-                      <p className="wb-notice">暂无可下载城市，请检查风神权限或网络连接。</p>
+                      <p className="wb-notice mt-3">暂无可下载城市，请检查风神权限或网络连接。</p>
                     )}
                   </fieldset>
                 )}
 
-                {!noDate && <fieldset aria-labelledby="download-dates-label" className="wb-scope-section">
+                {!noDate && <fieldset aria-labelledby="download-dates-label" className="wb-step-card">
                   <legend className="sr-only">下载日期</legend>
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <div className="wb-section-step-header">
-                      <span className="wb-step-badge">{noCity ? '01' : '02'}</span>
-                      <p id="download-dates-label" className="text-sm font-semibold text-slate-900 m-0">处理日期 <span className="ml-2 text-xs font-normal text-slate-500">北京时间</span></p>
+                  <div className="wb-step-card-header">
+                    <div className="wb-step-badge">
+                      <span className="wb-step-number">{noCity ? '01' : '02'}</span>
+                      <p id="download-dates-label" className="wb-step-title m-0">
+                        处理日期 <span className="ml-1.5 text-xs font-normal text-slate-500">北京时间</span>
+                      </p>
+                      {noCity && (
+                        <span className="wb-step-count-pill">覆盖范围：可访问全部城市</span>
+                      )}
                     </div>
                     {!xiaoxiangOnly && <div className="wb-period-quick-bar" role="group" aria-label="核算账期快捷选择">
                       {([
@@ -972,16 +1031,44 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                       })}
                     </div>}
                   </div>
-                  <div className="grid max-w-xl grid-cols-2 gap-3">
-                    <label className="flex min-w-0 flex-col gap-1.5 text-xs text-slate-500"><span>开始日期</span><input type="date" aria-label="下载开始日期" min={merchantOnly?attendanceFirst:xiaoxiangOnly?xiaoxiangFirst:undefined} max={merchantOnly?attendanceLast:xiaoxiangOnly?dailyDate:undefined} value={start} disabled={formLocked} onChange={event => setStart(event.target.value)} className={fieldStyle} /></label>
-                    <label className="flex min-w-0 flex-col gap-1.5 text-xs text-slate-500"><span>结束日期</span><input type="date" aria-label="下载结束日期" min={merchantOnly?attendanceFirst:xiaoxiangOnly?xiaoxiangFirst:undefined} max={merchantOnly?attendanceLast:xiaoxiangOnly?dailyDate:undefined} value={end} disabled={formLocked} onChange={event => setEnd(event.target.value)} className={fieldStyle} /></label>
+                  <div className="grid w-full grid-cols-1 gap-3.5 sm:grid-cols-2">
+                    <div className="flex min-w-0 flex-col gap-1.5 text-xs font-medium text-slate-600">
+                      <span>开始日期</span>
+                      <WorkbenchDatePicker
+                        ariaLabel="下载开始日期"
+                        min={merchantOnly ? attendanceFirst : xiaoxiangOnly ? xiaoxiangFirst : undefined}
+                        max={merchantOnly ? attendanceLast : xiaoxiangOnly ? dailyDate : undefined}
+                        value={start}
+                        rangeRole="start"
+                        rangeStart={start}
+                        rangeEnd={end}
+                        today={shanghaiToday()}
+                        disabled={formLocked}
+                        onChange={nextValue => setStart(nextValue)}
+                      />
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-1.5 text-xs font-medium text-slate-600">
+                      <span>结束日期</span>
+                      <WorkbenchDatePicker
+                        ariaLabel="下载结束日期"
+                        min={merchantOnly ? attendanceFirst : xiaoxiangOnly ? xiaoxiangFirst : undefined}
+                        max={merchantOnly ? attendanceLast : xiaoxiangOnly ? dailyDate : undefined}
+                        value={end}
+                        rangeRole="end"
+                        rangeStart={start}
+                        rangeEnd={end}
+                        today={shanghaiToday()}
+                        disabled={formLocked}
+                        onChange={nextValue => setEnd(nextValue)}
+                      />
+                    </div>
                   </div>
 
-                  {!validDates && <p role="alert" className="mt-2 text-xs text-rose-700">开始日期不能晚于结束日期，请选择有效日期。</p>}
-                  {xiaoxiangOnly && validDates && !xiaoxiangDateValid && <p role="alert" className="mt-2 text-xs text-rose-700">灯塔资料只能选择昨天及更早的日期，且区间最长31天。</p>}
-                  {monthPreview.length > 0 && <p className="mt-2 text-xs leading-relaxed text-sky-700">整月资料自动下载：{monthPreview.join('、')}。</p>}
+                  {!validDates && <p role="alert" className="mt-2.5 text-xs text-rose-700">开始日期不能晚于结束日期，请选择有效日期。</p>}
+                  {xiaoxiangOnly && validDates && !xiaoxiangDateValid && <p role="alert" className="mt-2.5 text-xs text-rose-700">灯塔资料只能选择昨天及更早的日期，且区间最长31天。</p>}
+                  {monthPreview.length > 0 && <p className="mt-2.5 text-xs leading-relaxed text-sky-700">整月资料自动下载：{monthPreview.join('、')}。</p>}
                   {!merchantOnly && (
-                    <div className="mt-3.5 pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
+                    <div className="wb-date-rule-bar">
                       <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
                         <input
                           type="checkbox"
@@ -1010,29 +1097,37 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                   {orderWindowWarning && <p role="alert" className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">欺诈单和问题单仅支持最近 {orderWindowDays} 天（{earliestOrder} 至 {shanghaiToday()}），请调整日期或取消这两类资料。</p>}
                 </fieldset>}
 
-                <fieldset aria-labelledby="download-datasets-label" className="wb-scope-section">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div className="wb-section-step-header">
-                      <span className="wb-step-badge">{noCity && noDate ? '01' : noCity || noDate ? '02' : '03'}</span>
-                      <span id="download-datasets-label" className="text-sm font-bold text-slate-900">选择资料 <span className="ml-2 text-xs font-normal text-slate-500">已选 {datasets.length}</span></span>
+                <fieldset aria-labelledby="download-datasets-label" className="wb-step-card">
+                  {!platform && (
+                    <div className="wb-step-card-header">
+                      <div className="wb-step-badge">
+                        <span className="wb-step-number">{noCity && noDate ? '02' : noCity || noDate ? '02' : '03'}</span>
+                        <span id="download-datasets-label" className="wb-step-title">选择资料</span>
+                        <span className="wb-step-count-pill">已选 {datasets.length}</span>
+                      </div>
                     </div>
-                  </div>
+                  )}
                   {(['fengshen', 'lanorange', 'baize', 'xiaoxiang'] as const).filter(group => platform?group===platform:systemFilter === 'all' || systemFilter === group).map(group => {
-                    const ids = visibleDatasets.filter(value => !isGenerator(value.id) && !isMerchant(value.id) && datasetGroup(value.id) === group).map(value => value.id);
+                    const groupDatasets = visibleDatasets.filter(value => !isGenerator(value.id) && datasetGroup(value.id) === group);
+                    const ids = groupDatasets.filter(value => !isMerchant(value.id)).map(value => value.id);
                     const allSelected = ids.length > 0 && ids.every(id => datasets.includes(id));
                     const selectedCount = datasets.filter(id => datasetGroup(id) === group).length;
+                    const stepNum = noCity && noDate ? '02' : noCity || noDate ? '02' : '03';
                     return (
                       <div key={group} className="wb-source-group">
-                        <div className="wb-source-header">
-                          <div className="wb-source-title">
+                        <div className={platform ? 'wb-step-card-header' : 'wb-source-header'}>
+                          <div className={platform ? 'wb-step-badge' : 'wb-source-title'}>
+                            {platform && <span className="wb-step-number">{stepNum}</span>}
                             <span className={`wb-sys-badge is-${group}`}>{group === 'baize' ? '商翼' : group === 'xiaoxiang' ? '灯塔' : group === 'lanorange' ? '蓝橙' : '风神'}</span>
-                            <span>{group === 'baize' ? '商翼员工资料' : group === 'xiaoxiang' ? '灯塔资料' : group === 'lanorange' ? '蓝橙资料' : '风神资料'}</span>
-                            <span className="wb-muted ml-1 text-xs">已选 {selectedCount}</span>
+                            <span id={platform ? 'download-datasets-label' : undefined} className={platform ? 'wb-step-title' : ''}>
+                              {group === 'baize' ? '选择资料 · 商翼员工资料' : group === 'xiaoxiang' ? '选择资料 · 灯塔资料' : group === 'lanorange' ? '选择资料 · 蓝橙资料' : '选择资料 · 风神资料'}
+                            </span>
+                            <span className="wb-step-count-pill">已选 {selectedCount} / {groupDatasets.length}</span>
                           </div>
                           <button
                             type="button"
                             disabled={formLocked}
-                            className="text-xs text-sky-700 hover:text-sky-800 font-medium"
+                            className="wb-city-preset-btn"
                             onClick={() => {
                               setDatasets(allSelected ? datasets.filter(id => !ids.includes(id)) : group === 'baize' || group === 'xiaoxiang' ? ids : [...new Set([...datasets.filter(id => !isBaize(id) && !isXiaoxiang(id) && !isMerchant(id)), ...ids])]);
                             }}
@@ -1040,144 +1135,192 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                             {group === 'fengshen' ? (allSelected ? '清空城市资料' : '全选城市资料') : (allSelected ? '清空本组' : '全选本组')}
                           </button>
                         </div>
-                        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                          {visibleDatasets.filter(value => !isGenerator(value.id) && datasetGroup(value.id) === group).map(dataset => (
-                            <label key={dataset.id} className={choiceStyle(datasets.includes(dataset.id))}>
-                              <input
-                                type="checkbox"
-                                checked={datasets.includes(dataset.id)}
-                                disabled={formLocked}
-                                onChange={() => {
-                                  setDatasets(values => toggleDownloadDataset(values, dataset.id));
-                                  if (dataset.id === 'attendance_detail') {
-                                    if (end > attendanceLast) setEnd(attendanceLast);
-                                    if (start > attendanceLast) setStart(attendanceLast);
-                                  }
-                                }}
-                                className="accent-sky-700 shrink-0 h-4 w-4 rounded border-slate-300"
-                              />
-                              <span className="truncate leading-snug">{dataset.label.replaceAll('白泽', '商翼').replaceAll('小象灯塔', '灯塔').replaceAll('小象', '灯塔')}</span>
-                            </label>
-                          ))}
+                        <div className={`grid grid-cols-1 gap-2.5 ${group === 'baize' || groupDatasets.length === 1 ? 'is-single-item sm:grid-cols-1' : 'sm:grid-cols-2 lg:grid-cols-3'}`}>
+                          {groupDatasets.map(dataset => {
+                            const selected = datasets.includes(dataset.id);
+                            const cardMeta = getDatasetCardMeta(dataset.id, dataset.label);
+                            return (
+                              <label key={dataset.id} className={`${choiceStyle(selected)} wb-dataset-card ${selected ? 'is-selected' : ''}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  disabled={formLocked}
+                                  onChange={() => {
+                                    setDatasets(values => toggleDownloadDataset(values, dataset.id));
+                                    if (dataset.id === 'attendance_detail') {
+                                      if (end > attendanceLast) setEnd(attendanceLast);
+                                      if (start > attendanceLast) setStart(attendanceLast);
+                                    }
+                                  }}
+                                  className="accent-sky-700 shrink-0 h-4 w-4 rounded border-slate-300 wb-dataset-checkbox"
+                                />
+                                <div className="wb-dataset-body">
+                                  <div className="wb-dataset-top-row">
+                                    <span className="wb-dataset-title truncate">{cardMeta.title}</span>
+                                    <span className={`wb-dataset-tag is-${cardMeta.tone}`}>{cardMeta.scopeTag}</span>
+                                  </div>
+                                  <span className="wb-dataset-desc truncate">{cardMeta.desc}</span>
+                                </div>
+                              </label>
+                            );
+                          })}
                         </div>
                       </div>
                     );
                   })}
                 </fieldset>
 
-                </>}
-                {uncertainCreate && <p className="wb-notice">原请求资料：{createAttempt.current?.payload.datasets.map(datasetLabel).join('、')}。本次继续确认原请求，分类不改变其内容。</p>}
-                {uncertainCreate && <p role="status" className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">上次提交结果尚未确认，已锁定原选择。请点击“重新确认原请求”，继续确认同一任务。</p>}
-                {!uncertainCreate && matchingRun && <div className="rounded-lg bg-sky-50 border border-sky-200 p-3 text-xs text-sky-800 space-y-2"><p>{completedMatch ? '相同选择已有文件，可直接查看和下载。' : '相同选择已有任务正在执行，可直接查看进度。'}</p>{completedMatch && <label className="flex items-center gap-2"><input type="checkbox" checked={duplicateApproval === currentSelectionKey} disabled={creating} onChange={event => setDuplicateApproval(event.target.checked ? currentSelectionKey : '')} />重新采集，创建新版本</label>}</div>}
+                {uncertainCreate && <p className="wb-notice mt-3">原请求资料：{createAttempt.current?.payload.datasets.map(datasetLabel).join('、')}。本次继续确认原请求，分类不改变其内容。</p>}
+                {uncertainCreate && <p role="status" className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">上次提交结果尚未确认，已锁定原选择。请点击“重新确认原请求”，继续确认同一任务。</p>}
+                {!uncertainCreate && matchingRun && <div className="mt-3 rounded-lg bg-sky-50 border border-sky-200 p-3 text-xs text-sky-800 space-y-2"><p>{completedMatch ? '相同选择已有文件，可直接查看和下载。' : '相同选择已有任务正在执行，可直接查看进度。'}</p>{completedMatch && <label className="flex items-center gap-2"><input type="checkbox" checked={duplicateApproval === currentSelectionKey} disabled={creating} onChange={event => setDuplicateApproval(event.target.checked ? currentSelectionKey : '')} />重新采集，创建新版本</label>}</div>}
               </div>
               <aside className="wb-task-preview wb-preview-compact" aria-label="本次任务已选清单与执行">
-                <div className="wb-compact-rail-header">
-                  <div className="wb-compact-rail-title">
-                    <h4>已选清单</h4>
-                    <span className="wb-compact-count-pill">{datasets.length}</span>
-                  </div>
-                  {datasets.length > 0 && (
-                    <button
-                      type="button"
-                      className="wb-compact-clear-btn"
-                      disabled={formLocked}
-                      onClick={() => setDatasets([])}
-                    >
-                      清空
-                    </button>
-                  )}
-                </div>
-
-                <div className="wb-compact-list-wrap">
-                  {datasets.length > 0 ? (
-                    <ul className="wb-compact-dataset-list">
-                      {datasets.map(id => {
-                        return (
-                          <li key={id} className="wb-compact-dataset-item">
-                            <span className="wb-compact-item-name" title={datasetLabel(id)}>
-                              {datasetLabel(id).replace('（生成表）', '').replaceAll('白泽', '商翼').replaceAll('小象灯塔', '灯塔').replaceAll('小象', '灯塔')}
-                            </span>
-                            <button
-                              type="button"
-                              className="wb-compact-item-remove"
-                              disabled={formLocked}
-                              aria-label={`移除 ${datasetLabel(id)}`}
-                              onClick={() => setDatasets(values => values.filter(v => v !== id))}
-                            >
-                              ×
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <div className="wb-compact-empty">
-                      <span className="wb-compact-empty-dot" />
-                      <p>未勾选资料</p>
-                      <small>请在左侧勾选需要采集的项目</small>
-                    </div>
-                  )}
-                </div>
-
-                <div className="wb-compact-scope-box">
-                  <div className="wb-compact-scope-row">
-                    <span className="wb-compact-scope-k">处理城市</span>
-                    <span className="wb-compact-scope-v" title={cities.join('、')}>
-                      {archiveOnly ? '全部站点快照' : xiaoxiangDated ? '可访问全部城市' : blueOnly ? '全部城市（全量）' : cities.length ? `${cities.slice(0, 3).join('、')}${cities.length > 3 ? ` 等 ${cities.length} 城` : ''}` : '未选择城市'}
-                    </span>
-                  </div>
-                  <div className="wb-compact-scope-row">
-                    <span className="wb-compact-scope-k">业务账期</span>
-                    <span className="wb-compact-scope-v font-mono">
-                      {archiveOnly || blueOnly || merchantSnapshotOnly ? '全量无限制' : xiaoxiangDated ? (start===end?start:`${start.slice(5)}~${end.slice(5)}`) : `${start.slice(5)} ~ ${end.slice(5)}`}
-                    </span>
-                  </div>
-                  {!noCity && (
-                    <div className="wb-compact-scope-row">
-                      <span className="wb-compact-scope-k">站点规则</span>
-                      <span className="wb-compact-scope-v">
-                        {merchantOnly ? '全部站点' : includeSeparation ? '仅取分离' : '排除取分离'}
+                <div className="wb-compact-rail-top">
+                  <div className="wb-compact-rail-header">
+                    <div className="wb-compact-rail-title">
+                      <h4>已选清单</h4>
+                      <span className="wb-compact-count-pill">
+                        {datasets.length > 0 ? `已选 ${datasets.length} 项` : '0 项'}
                       </span>
                     </div>
-                  )}
+                    {datasets.length > 0 && (
+                      <button
+                        type="button"
+                        className="wb-compact-clear-btn"
+                        disabled={formLocked}
+                        onClick={() => setDatasets([])}
+                      >
+                        清空
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="wb-compact-list-wrap">
+                    {datasets.length > 0 ? (
+                      <div className="wb-compact-list-surface">
+                        <ul className={`wb-compact-dataset-list ${datasets.length <= 3 ? 'is-detailed' : 'is-dense'}`}>
+                          {datasets.map((id, index) => {
+                            const cardMeta = getDatasetCardMeta(id, datasetLabel(id));
+                            return (
+                              <li key={id} className="wb-compact-dataset-item">
+                                <span className="wb-compact-item-index" aria-hidden="true">
+                                  {String(index + 1).padStart(2, '0')}
+                                </span>
+                                <div className="wb-compact-item-body">
+                                  <div className="wb-compact-item-row">
+                                    <span className="wb-compact-item-name" title={datasetLabel(id)}>
+                                      {cardMeta.title}
+                                    </span>
+                                    <span className={`wb-dataset-tag wb-compact-item-tag is-${cardMeta.tone}`}>
+                                      {cardMeta.scopeTag}
+                                    </span>
+                                  </div>
+                                  {datasets.length <= 3 && (
+                                    <span className="wb-compact-item-desc" title={cardMeta.desc}>
+                                      {cardMeta.desc}
+                                    </span>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  className="wb-compact-item-remove"
+                                  disabled={formLocked}
+                                  aria-label={`移除 ${datasetLabel(id)}`}
+                                  onClick={() => setDatasets(values => values.filter(v => v !== id))}
+                                >
+                                  ×
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                        {railSummary.listFooterText && (
+                          <div className="wb-compact-list-footer">
+                            <span className="wb-compact-footer-text">{railSummary.listFooterText}</span>
+                            <span className={`wb-compact-ready-badge ${submitReady ? 'is-ready' : 'is-warn'}`}>
+                              {submitReady ? '配置就绪' : '待完善'}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="wb-compact-empty">
+                        <span className="wb-compact-empty-dot" />
+                        <p>尚未勾选采集资料</p>
+                        <small>请在左侧模块勾选需要下载的数据表</small>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                <div className="wb-compact-action-area">
-                  <button
-                    type="button"
-                    onClick={() => void startDownload()}
-                    disabled={creating || (!uncertainCreate && !canSubmit)}
-                    className="wb-compact-submit-btn"
-                  >
-                    {creating ? <Loader2 size={16} className="animate-spin" /> : <CloudDownload size={16} />}
-                    <span>
-                      {creating ? '提交中…' : uncertainCreate ? '确认原请求' : matchingRun && !TERMINAL_STATUSES.has(matchingRun.status) ? '查看进行中任务' : completedMatch && duplicateApproval !== currentSelectionKey ? '查看已有文件' : '开始下载'}
-                    </span>
-                  </button>
-                  <p className={`wb-compact-submit-hint ${submitReady ? 'is-ready' : 'is-warn'}`}>
-                    {submitHint}
-                  </p>
-                  {submittedTaskInfo && (
-                    <div role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/95 p-2.5 text-xs text-emerald-800">
-                      <div className="flex items-center justify-between gap-2 font-medium">
-                        <span className="flex items-center gap-1.5 text-emerald-700">
-                          <CheckCircle2 size={14} className="shrink-0 text-emerald-600" />
-                          已成功创建任务
-                        </span>
-                        <button
-                          type="button"
-                          className="text-slate-400 hover:text-slate-600 p-0.5"
-                          onClick={() => setSubmittedTaskInfo(null)}
-                          aria-label="关闭提示"
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
-                      <p className="mt-1 text-slate-600 text-[11px] leading-relaxed">
-                        任务已在后台执行，可前往左侧「任务中心」或右上角通知查看实时进度与交付文件。
-                      </p>
+                <div className="wb-compact-rail-bottom">
+                  <div className="wb-compact-scope-box">
+                    <div className="wb-compact-scope-header">
+                      <span>执行范围核对</span>
+                      <span className="wb-compact-scope-sub">北京时间</span>
                     </div>
-                  )}
+                    <div className="wb-compact-scope-row">
+                      <span className="wb-compact-scope-k">处理城市</span>
+                      <span className="wb-compact-scope-v" title={cities.join('、')}>
+                        {railSummary.cityLabel}
+                      </span>
+                    </div>
+                    <div className="wb-compact-scope-row">
+                      <span className="wb-compact-scope-k">业务账期</span>
+                      <span className="wb-compact-scope-v wb-compact-scope-period">
+                        <span className="font-mono">{railSummary.periodText}</span>
+                        {railSummary.periodSpanBadge && (
+                          <span className="wb-compact-period-badge">{railSummary.periodSpanBadge}</span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="wb-compact-scope-row">
+                      <span className="wb-compact-scope-k">{railSummary.thirdRowLabel}</span>
+                      <span className="wb-compact-scope-v">
+                        {railSummary.thirdRowValue}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="wb-compact-action-area">
+                    <button
+                      type="button"
+                      onClick={() => void startDownload()}
+                      disabled={creating || (!uncertainCreate && !canSubmit)}
+                      className="wb-compact-submit-btn"
+                    >
+                      {creating ? <Loader2 size={16} className="animate-spin" /> : <CloudDownload size={16} />}
+                      <span>
+                        {creating ? '提交中…' : uncertainCreate ? '确认原请求' : matchingRun && !TERMINAL_STATUSES.has(matchingRun.status) ? '查看进行中任务' : completedMatch && duplicateApproval !== currentSelectionKey ? '查看已有文件' : '开始下载'}
+                      </span>
+                    </button>
+                    {!submitReady && railSummary.blockerHint && (
+                      <p className="wb-compact-submit-hint is-warn">
+                        {railSummary.blockerHint}
+                      </p>
+                    )}
+                    {submittedTaskInfo && (
+                      <div role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/95 p-2.5 text-xs text-emerald-800">
+                        <div className="flex items-center justify-between gap-2 font-medium">
+                          <span className="flex items-center gap-1.5 text-emerald-700">
+                            <CheckCircle2 size={14} className="shrink-0 text-emerald-600" />
+                            已成功创建任务
+                          </span>
+                          <button
+                            type="button"
+                            className="text-slate-400 hover:text-slate-600 p-0.5"
+                            onClick={() => setSubmittedTaskInfo(null)}
+                            aria-label="关闭提示"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                        <p className="mt-1 text-slate-600 text-[11px] leading-relaxed">
+                          任务已在后台执行，可前往左侧「任务中心」或右上角通知查看实时进度与交付文件。
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </aside>
               </>}
