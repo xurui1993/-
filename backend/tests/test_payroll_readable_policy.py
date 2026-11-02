@@ -131,7 +131,7 @@ class ReadablePolicyTests(TestCase):
         with target.open(encoding='utf-8-sig') as f:rows=list(csv.DictReader(f))
         self.assertEqual([r['骑手ID'] for r in rows],['1','2']);self.assertEqual(rows[1]['备注'],'原文')
 
-    def test_optional_login_does_not_hold_the_unified_delivery_task(self):
+    def test_binding_login_keeps_the_original_task_waiting_and_never_silently_skips(self):
         from download_service import DownloadCancelled
         config={'task_kind':'payroll_source','payroll_unified':True,'payroll_scope_agencies':[],
                 'cities':['测试城'],'datasets':['delivery_fee','payment_binding'],'months':['2026-10'],'start':'2026-10-01','end':'2026-10-15'}
@@ -143,11 +143,11 @@ class ReadablePolicyTests(TestCase):
                 changed({**d,'status':'success','files':[d]})
             else:
                 changed({'_run_event':True,'status':'waiting_login','phase':'waiting_login'})
-                self.assertTrue(cancelled.is_set());raise DownloadCancelled('optional authentication not required')
+                self.assertFalse(cancelled.is_set());raise DownloadCancelled('verification not completed')
             return []
-        with patch('download_service.execute_downloads',side_effect=provider):files=execute(config,self.root/'download',lambda *a:None,threading.Event(),updates.append)
-        self.assertEqual([f['dataset'] for f in files],['delivery_fee'])
-        self.assertFalse(any(e.get('status')=='waiting_login' for e in updates))
+        with patch('download_service.execute_downloads',side_effect=provider), self.assertRaisesRegex(SourceError,'未生成工资表'):
+            execute(config,self.root/'download',lambda *a:None,threading.Event(),updates.append)
+        self.assertTrue(any(e.get('status')=='waiting_login' and e.get('payroll_verification_required') for e in updates))
 
     def test_readable_policy_calls_engine_without_hashes_and_with_unknown_binding_price(self):
         manager,run=self.manager();self.state['status']='pending_download';self.state['jobs']=[]

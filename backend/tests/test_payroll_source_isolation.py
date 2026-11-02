@@ -27,22 +27,20 @@ class SourceIsolationTests(unittest.TestCase):
         description={**_requested_items(child)[0],'relative_path':path.name}
         changed({**description,'status':'success','files':[description]})
 
-    def test_authentication_only_skips_its_source_and_keeps_later_sources(self):
+    def test_binding_verification_waits_and_continues_before_other_sources(self):
         calls=[];updates=[];logs=[]
         def provider(child,root,log,cancelled,changed,runner_factory=None):
             self.assertEqual(len(child['datasets']),1);kind=child['datasets'][0];calls.append(kind)
             if kind=='payment_binding':
                 changed({'_run_event':True,'status':'waiting_login','phase':'waiting_manual'})
-                self.assertTrue(cancelled.is_set());raise DownloadCancelled('authentication')
+                self.assertFalse(cancelled.is_set())
             self.assertFalse(cancelled.is_set());self.publish(child,root,changed);return []
         with patch('download_service.execute_downloads',side_effect=provider):
             files=execute(self.config,self.root,logs.append,threading.Event(),updates.append)
-        self.assertEqual(calls,self.config['datasets'])
-        self.assertEqual({entry['dataset'] for entry in files},{'delivery_fee','penalty','lanorange_part_price'})
-        failure=next(entry for entry in updates if entry.get('dataset')=='payment_binding' and entry['status']=='error')
-        self.assertIn('需要完成平台验证',failure['error'])
-        self.assertTrue(any('骑手支付绑定' in message and '需要完成平台验证' in message for message in logs))
-        self.assertFalse(any(entry['status']=='waiting_login' for entry in updates))
+        self.assertEqual(calls,['payment_binding','delivery_fee','penalty','lanorange_part_price'])
+        self.assertEqual({entry['dataset'] for entry in files},set(self.config['datasets']))
+        self.assertTrue(any(entry['status']=='waiting_login' and entry['payroll_verification_required'] for entry in updates))
+        self.assertFalse(any(entry['status']=='error' for entry in updates))
 
     def test_curated_item_error_is_retained_and_does_not_stop_other_items(self):
         updates=[]
@@ -66,11 +64,12 @@ class SourceIsolationTests(unittest.TestCase):
                          'status':'waiting_login','phase':'waiting_manual'})
                 raise DownloadCancelled('dependency auth')
             self.publish(child,root,changed);return []
-        with patch('download_service.execute_downloads',side_effect=provider):
-            files=execute(self.config,self.root,lambda *_:None,threading.Event(),updates.append)
-        self.assertEqual(len(files),3)
-        failure=next(entry for entry in updates if entry.get('dataset')=='payment_binding' and entry['status']=='error')
-        self.assertIn('需要完成平台验证',failure['error'])
+        from parttime_source import SourceError
+        with patch('download_service.execute_downloads',side_effect=provider), self.assertRaisesRegex(SourceError,'未生成工资表'):
+            execute(self.config,self.root,lambda *_:None,threading.Event(),updates.append)
+        waiting=next(entry for entry in updates if entry['status']=='waiting_login')
+        self.assertEqual(waiting['dataset'],'payment_binding')
+        self.assertTrue(waiting['payroll_verification_required'])
 
     def test_unknown_errors_never_persist_private_payloads(self):
         logs=[];updates=[]
@@ -89,4 +88,4 @@ class SourceIsolationTests(unittest.TestCase):
             calls.append(child['datasets'][0]);stop.set();raise DownloadCancelled('任务已停止')
         with patch('download_service.execute_downloads',side_effect=provider),self.assertRaises(DownloadCancelled):
             execute(self.config,self.root,lambda *_:None,stop,lambda *_:None)
-        self.assertEqual(calls,['delivery_fee'])
+        self.assertEqual(calls,['payment_binding'])

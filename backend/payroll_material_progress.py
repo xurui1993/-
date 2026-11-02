@@ -59,7 +59,7 @@ def material_progress(state, runs):
         elif value['status']=='omitted': status='omitted';detail=value.get('note') or '原批次未提供'
         elif value['status']=='failed' or any(s in ('error','interrupted') for s in statuses):status='failed';detail=value.get('error') or next((g['error'] for g in groups if g['error']),'获取未完成')
         elif len(groups)==len(scopes) and all(s=='success' for s in statuses):status='validating';detail='文件已下载，等待本批次校验'
-        elif 'waiting_login' in statuses:status='waiting_login';detail='等待平台登录，完成后继续'
+        elif 'waiting_login' in statuses:status='waiting_login';detail=next((g['detail'] for g in groups if g['status']=='waiting_login'), '等待平台验证，完成后继续')
         elif any(s in ('running','preparing') for s in statuses):status='running';detail=next(g['detail'] for g in groups if g['status'] in ('running','preparing'))
         elif any(s=='cancelled' for s in statuses) or state['status'] in ('cancelled','stopping'):status='cancelled';detail='已停止，已有文件保留'
         else:status='pending';detail='等待下载'
@@ -69,7 +69,7 @@ def material_progress(state, runs):
             elif status=='validating':detail='正在整理资料'
             elif status in ('failed','omitted'):
                 status='omitted';detail=value.get('note') or detail+'；未参与本次核算'
-            group_status='success' if completed==len(scopes) else 'running' if status in ('running','validating') else 'omitted' if status=='omitted' else 'queued'
+            group_status='success' if completed==len(scopes) else 'waiting_login' if status=='waiting_login' else 'running' if status in ('running','validating') else 'omitted' if status=='omitted' else 'queued'
             scope_label='统一资料'
             if state.get('download_scope')=='single_selection':
                 if 'exclude_separation' in state:

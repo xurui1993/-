@@ -230,10 +230,11 @@ class MoziSmsProtocol:
 
 
 class HTTPAuth:
-    def __init__(self, client, broker=BROKER, cancelled=None, log=lambda _: None, timeout=1800, protocol=None):
+    def __init__(self, client, broker=BROKER, cancelled=None, log=lambda _: None, timeout=1800, protocol=None, wait_export_indefinitely=False):
         self.client, self.broker = client, broker
         self.cancelled = cancelled if cancelled is not None else client.cancelled
         self.log, self.timeout = log, timeout
+        self.wait_export_indefinitely = wait_export_indefinitely
         self.protocol = protocol if protocol is not None else MoziSmsProtocol(client)
 
     def export_code(self, client=None):
@@ -246,14 +247,15 @@ class HTTPAuth:
         with self.broker.lock:
             if not self.broker.active:
                 raise AuthError("导出验证操作尚未启动")
-            self.broker.active.update(transport="http", purpose="export")
+            import secrets
+            self.broker.active.update(id=secrets.token_urlsafe(32), transport="http", purpose="export")
             self.broker.send_count = self.broker.verify_count = 0
             self.broker.phone_mask = "平台账号绑定手机号"
         self.broker.update("login_required", "骑手信息导出需要短信确认，请获取平台绑定手机号的验证码")
         sent = False
-        deadline = time.monotonic() + self.timeout
+        deadline = None if self.wait_export_indefinitely else time.monotonic() + self.timeout
         try:
-            while time.monotonic() < deadline:
+            while deadline is None or time.monotonic() < deadline:
                 if self.cancelled.is_set():
                     raise AuthError("导出短信验证已取消")
                 try:

@@ -6,11 +6,31 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 import payroll_inputs as inputs
 
 
 class PayrollReviewFlowTests(unittest.TestCase):
+    def test_unfinished_binding_verification_never_reaches_calculation_even_if_delivery_exists(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp)
+            state={'id':'synthetic','mode':'fengshen','status':'preparing','workflow':'two_step_v1','input_policy':'readable_delivery_v1',
+                   'jobs':['job'],'download_scope':'single_selection','download_owner':'test',
+                   'plan':{'city':'测试城','start':'2026-10-01','end':'2026-10-15'},
+                   'items':{'delivery_fee':{'label':'配送费','status':'pending'},'payment_binding':{'label':'支付绑定','status':'pending'}}}
+            run={'id':'job','status':'error','phase':'failed','progress':0,'files':[], 'payroll_verification_required':True,
+                 'items':[{'dataset':'payment_binding','status':'error','phase':'failed','error':'验证未完成'},
+                          {'dataset':'delivery_fee','status':'success','phase':'completed'}]}
+            from unittest.mock import Mock
+            manager=Mock();manager.get_run.return_value=run
+            def collect(*args):
+                state['status']='ready';state['items']['delivery_fee']['status']='ready';state['items']['payment_binding']['status']='omitted'
+            async def execute():
+                return [event async for event in inputs._run_payroll(SimpleNamespace(),None,folder,state,__import__('threading').Event(),context=('shared','test'))]
+            with patch('download_jobs.get_manager',return_value=manager),patch.object(inputs,'collect_finished',side_effect=collect),patch('tasks.run_main_calculation_gen') as engine:
+                with self.assertRaisesRegex(inputs.SourceError,'未生成工资表'):asyncio.run(execute())
+                engine.assert_not_called()
+
     def test_success_persists_summary_and_export_without_changing_engine_options(self):
         self.run_flow(False)
 
@@ -37,6 +57,8 @@ class PayrollReviewFlowTests(unittest.TestCase):
             calls = []
             async def engine(*args, **kwargs):
                 calls.append(kwargs)
+                for name in ('工资表.xlsx','蓝橙无单价&未绑名单.xlsx'):
+                    result=Workbook();result.save(output/name);result.close()
                 yield 'data: '+json.dumps({'type':'finish','status':'success','out_file':str(output),'stats':{'riders':1,'orders':10,'no_price':1,'unbound':0,'intercepted':0}})+'\n\n'
             async def run():
                 config = SimpleNamespace(payrollSourceMode='manual',payrollPreparationId='synthetic',basePath='',theme='',enableInterceptor=True,enableCrossStationMerge=False,deductionConfigVersion='rules-v1')
@@ -59,7 +81,9 @@ class PayrollReviewFlowTests(unittest.TestCase):
             if export_failure:
                 self.assertIn('export_error',finish['review_summary'])
             else:
-                self.assertTrue((output/'核算复核清单.csv').is_file())
+                self.assertEqual({p.name for p in output.iterdir()},{'工资表.xlsx','蓝橙无单价&未绑名单.xlsx'})
+                result=load_workbook(output/'工资表.xlsx');self.assertIn('核算复核清单',result.sheetnames);result.close()
+                self.assertEqual(stored['result']['delivery_layout'],'payroll_workbooks_v1')
 
 
 if __name__ == '__main__':

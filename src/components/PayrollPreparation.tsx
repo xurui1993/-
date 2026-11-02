@@ -17,7 +17,7 @@ export interface PayrollPreparationState {
   automatic_deductions?: {zero_stations:string[];sources:{station:{name:string};source:string}[]};
   pause_reason?: string;
   stop_requested?: boolean;
-  execution?: {waiting_login:boolean;phase:string};
+  execution?: {waiting_login:boolean;waiting_verification?:boolean;phase:string};
   execution_started_at?: string;
   downloads?: {key:string;label:string;status:string;detail:string;completed_groups:number;total_groups:number;groups:{scope:string;label:string;status:string;detail:string;error?:string;files:string[]}[]}[];
   performance?: PayrollPerformance;

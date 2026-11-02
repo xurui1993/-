@@ -1,9 +1,8 @@
-import csv
-import json
+import zipfile
 from pathlib import Path
 import tempfile
 import unittest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from payroll_review import application_summary, build_review, metric_value, write_review
 
 
@@ -51,16 +50,36 @@ class PayrollReviewTests(unittest.TestCase):
             review = build_review(self.state(), {}, value)
             self.assertTrue(any(item['code']=='duplicate_application' for item in review['issues']))
 
-    def test_export_keeps_unknown_values_and_csv_cells_literal(self):
+    def test_embedded_review_is_chinese_and_preserves_all_existing_workbook_parts(self):
         with tempfile.TemporaryDirectory() as temp:
             value = build_review(self.state(), {})
             value['template']['name'] = '=HYPERLINK("example")'
+            value['sources'].append({'kind':'lanorange_part_price','label':'价格档案','status':'ready','files':[]})
+            path=Path(temp)/'工资表.xlsx'
+            book=Workbook();book.active['A1']='=SUM(1,2)';book.save(path);book.close()
+            book=Workbook();book.save(Path(temp)/'蓝橙无单价&未绑名单.xlsx');book.close()
+            with zipfile.ZipFile(path) as archive:before={info.filename:archive.read(info) for info in archive.infolist()}
             write_review(Path(temp), value)
-            stored = json.loads((Path(temp)/'核算复核摘要.json').read_text(encoding='utf-8'))
-            self.assertEqual(stored['status'], 'pending_review')
-            rows = list(csv.reader((Path(temp)/'核算复核清单.csv').open(encoding='utf-8-sig')))
+            with zipfile.ZipFile(path) as archive:
+                for name,content in before.items():
+                    if name not in ('xl/workbook.xml','xl/_rels/workbook.xml.rels','[Content_Types].xml'):
+                        self.assertEqual(archive.read(name),content,name)
+            book=load_workbook(path)
+            self.assertEqual(book.worksheets[0]['A1'].value,'=SUM(1,2)')
+            sheet=book['核算复核清单'];rows=list(sheet.values)
+            self.assertEqual(rows[0],('类别','提供方','项目','数值或状态','口径与复核位置'))
+            self.assertEqual(sheet.freeze_panes,'A2')
             self.assertTrue(any('未统计' in row for row in rows))
-            self.assertTrue(any(row[1].startswith("'=") for row in rows if len(row)>1))
+            literal=next(cell for row in sheet for cell in row if cell.value==value['template']['name'])
+            self.assertEqual(literal.data_type,'s')
+            self.assertTrue(any(row[1]=='蓝橙后台' for row in rows))
+            self.assertTrue(any(row[1]=='风神后台' for row in rows))
+            self.assertTrue(any(row[1]=='系统核算' for row in rows))
+            self.assertFalse(any(row[3] in ('ready','omitted','abc','123','rules') for row in rows))
+            book.close()
+            self.assertEqual({p.suffix for p in Path(temp).iterdir()},{'.xlsx'})
+            write_review(Path(temp), value)
+            book=load_workbook(path);self.assertEqual(book.sheetnames.count('核算复核清单'),1);book.close()
 
 
 if __name__ == '__main__':

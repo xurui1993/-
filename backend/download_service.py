@@ -380,7 +380,7 @@ def _open_runner(config, log, cancelled, notify):
             client = None
             try:
                 client = FengshenHttpClient(BROKER.vault.load(), cancelled=cancelled)
-                auth = HTTPAuth(client, BROKER, cancelled, log)
+                auth = HTTPAuth(client, BROKER, cancelled, log, wait_export_indefinitely=config.get('task_kind')=='payroll_source')
                 auth.ensure()
                 client.auth_handler = lambda: auth.ensure(force=True)
                 daily = DailyHttpCollector(client, log=log)
@@ -1133,10 +1133,12 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
                                             'materials': materials, 'exports_submitted': False})
                                 progress_log('[恢复] 五类原始资料完整性校验通过，仅恢复生成，不重新导出')
                             else:
-                                employees = binding_sources.employees()
-                                proxies = binding_sources.proxies(month)
                                 source_paths = {}
-                            for kind in (() if materials else ('rider_detail', 'receive_account', 'rider_info')):
+                                if config.get('task_kind') != 'payroll_source':
+                                    employees = binding_sources.employees()
+                                    proxies = binding_sources.proxies(month)
+                            kinds = ('rider_info', 'rider_detail', 'receive_account') if config.get('task_kind') == 'payroll_source' else ('rider_detail', 'receive_account', 'rider_info')
+                            for kind in (() if materials else kinds):
                                 _checkpoint(cancelled)
                                 if kind == 'receive_account':
                                     calendar = MonthlyBillRequest(month)
@@ -1147,6 +1149,9 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
                                 source_raw = directory / kind
                                 info = runner.rider_source(source_plan, source_raw, kind)
                                 source_paths[kind] = _rider_source_file(info, source_raw, kind, source_plan)
+                            if not materials and config.get('task_kind') == 'payroll_source':
+                                employees = binding_sources.employees()
+                                proxies = binding_sources.proxies(month)
                             set_phase('validating')
                             # 与账单使用同一范围；全量模式不预先丢弃取分离骑手。
                             include = separation_filter.filter_direction(config)

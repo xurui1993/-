@@ -41,6 +41,8 @@ class DeliveryStore:
                 db.execute('ALTER TABLE deliveries ADD COLUMN root TEXT')
                 for row in db.execute('SELECT key,folder FROM deliveries').fetchall():
                     db.execute('UPDATE deliveries SET root=? WHERE key=?',(str(Path(row['folder']).parent),row['key']))
+            if 'include_manifest' not in {row[1] for row in db.execute('PRAGMA table_info(deliveries)')}:
+                db.execute('ALTER TABLE deliveries ADD COLUMN include_manifest INTEGER NOT NULL DEFAULT 1')
 
     @contextmanager
     def db(self):
@@ -85,7 +87,7 @@ class DeliveryStore:
                 return path
         return None
 
-    def publish(self, key, created, label, files, incomplete=(), move=True):
+    def publish(self, key, created, label, files, incomplete=(), move=True, include_manifest=True):
         """Verify first; journal every rename. Unregistered files are never overwritten."""
         from download_archive import archive_component, beijing_time
         with LOCK:
@@ -174,16 +176,19 @@ class DeliveryStore:
                 with self.db() as db:
                     db.execute('INSERT OR REPLACE INTO artifacts VALUES (?,?,?,?,?,?)',
                                (entry['run_id'],entry['id'],key,str(target),checksum,length))
-            temporary = folder / ('.清单_' + uuid.uuid4().hex + '.tmp')
-            with temporary.open('w',encoding='utf-8-sig',newline='') as stream:
-                writer = csv.writer(stream)
-                writer.writerow(['任务','城市','资料','范围开始','范围结束','文件','字节数','SHA256'])
-                for entry,_,target,checksum,length in prepared:
-                    from download_archive import artifact_scope
-                    writer.writerow([key,entry.get('city',''),entry.get('dataset',''),*artifact_scope(entry),target.name,length,checksum])
-                for item in incomplete:
-                    writer.writerow([key,item.get('city',''),item.get('dataset',''),item.get('start',''),item.get('end',''),'未生成：'+item.get('status','未完成'),'',''])
-            os.replace(temporary,folder/'文件清单.csv')
+            if include_manifest:
+                temporary = folder / ('.清单_' + uuid.uuid4().hex + '.tmp')
+                with temporary.open('w',encoding='utf-8-sig',newline='') as stream:
+                    writer = csv.writer(stream)
+                    writer.writerow(['任务','城市','资料','范围开始','范围结束','文件','字节数','SHA256'])
+                    for entry,_,target,checksum,length in prepared:
+                        from download_archive import artifact_scope
+                        writer.writerow([key,entry.get('city',''),entry.get('dataset',''),*artifact_scope(entry),target.name,length,checksum])
+                    for item in incomplete:
+                        writer.writerow([key,item.get('city',''),item.get('dataset',''),item.get('start',''),item.get('end',''),'未生成：'+item.get('status','未完成'),'',''])
+                os.replace(temporary,folder/'文件清单.csv')
+            with self.db() as db:
+                db.execute('UPDATE deliveries SET include_manifest=? WHERE key=?',(int(include_manifest),key))
             return folder
 
     def _transfer(self, source, target, checksum, length, move):
@@ -255,6 +260,7 @@ def delivery_bundle(store, key):
     if folder is None:
         raise ValueError('本任务尚无结果目录')
     with store.db() as db:
+        include_manifest = db.execute('SELECT include_manifest FROM deliveries WHERE key=?',(key,)).fetchone()[0]
         rows=[dict(row) for row in db.execute('SELECT * FROM artifacts WHERE task_key=? ORDER BY path',(key,)) if Path(row['path']).parent==folder]
     if not rows:
         raise ValueError('本任务没有可领取文件')
@@ -275,7 +281,7 @@ def delivery_bundle(store, key):
                 if length!=row['bytes'] or checksum.hexdigest()!=row['sha256']:
                     raise ValueError('打包期间结果文件发生变化')
                 writer.writerow([key,source.name,row['bytes'],row['sha256']])
-            archive.writestr('文件清单.csv',table.getvalue().encode('utf-8-sig'))
+            if include_manifest:archive.writestr('文件清单.csv',table.getvalue().encode('utf-8-sig'))
         return target,folder.name+'.zip'
     except BaseException:
         target.unlink(missing_ok=True)

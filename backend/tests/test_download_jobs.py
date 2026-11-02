@@ -78,6 +78,19 @@ def write_detail_receipt(run_dir, config):
 
 
 class ManagerTests(unittest.TestCase):
+    def test_payroll_verification_requirement_survives_later_error_and_reload(self):
+        def executor(config,run_dir,log,cancelled,update):
+            description={key:config[key] for key in ('start','end')}
+            description.update(city=config['cities'][0],dataset='delivery_fee')
+            update({**description,'status':'waiting_login','phase':'waiting_manual','payroll_verification_required':True})
+            raise RuntimeError('fixture verification ended')
+        manager=self.manager(executor)
+        run=manager.create('tester',{**CONFIG,'task_kind':'payroll_source'},'verification_fixture')
+        final=self.wait_run(manager,run['id'])
+        self.assertTrue(final['payroll_verification_required'])
+        self.assertTrue(manager.get_run('tester',run['id'])['payroll_verification_required'])
+        self.assertEqual(final['status'],'error')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="download_jobs_", dir=Path(__file__).parent)
         self.root = Path(self.tmp.name)

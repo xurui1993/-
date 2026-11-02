@@ -122,6 +122,25 @@ class FakeRunner:
 
 
 class DownloadServiceTests(unittest.TestCase):
+    def test_payroll_downloads_rider_info_before_any_other_binding_dependency(self):
+        order=[]
+        sources=Mock()
+        sources.employees.side_effect=lambda:order.append('employees') or Path('employee.xlsx')
+        sources.proxies.side_effect=lambda month:order.append('proxies') or Path('proxy.xlsx')
+        original=self.runner.rider_source
+        def rider_source(plan,raw,kind):
+            order.append(kind)
+            return original(plan,raw,kind)
+        self.runner.rider_source=rider_source
+        def generate(paths,employees,proxies,plan,raw,log,cancelled):
+            target=Path(raw)/'generated.xlsx';target.write_bytes(b'fixture');return target,{}
+        config=self.config(['payment_binding'],start='2026-09-01',end='2026-09-30')
+        config['task_kind']='payroll_source'
+        with patch('binding_sources_http.BindingSources',return_value=sources),patch('binding_download.generate_binding',side_effect=generate):
+            files,updates,_=self.execute(config)
+        self.assertEqual(order,['rider_info','rider_detail','receive_account','employees','proxies'])
+        self.assertEqual(len(files),1)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
         self.addCleanup(self.tmp.cleanup)

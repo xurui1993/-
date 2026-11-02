@@ -28,6 +28,28 @@ class DeliveryTests(unittest.TestCase):
         return self.store.publish(key,'2026-10-31T01:02:03+00:00','业务报表',entries)
     def entry(self,path,run='run',file='file',**extra):
         return dict(run_id=run,id=file,path=str(path),city='泉州',**extra)
+
+    def test_new_payroll_publishes_only_two_workbooks_and_keeps_legacy_deliveries(self):
+        from openpyxl import Workbook
+        import payroll_inputs as payroll
+        key='b'*32
+        folder=self.root/'uploads/shared'/('payroll_'+key);folder.mkdir(parents=True)
+        output=self.root/'outputs/payroll_batches/shared'/key/'attempt_1';output.mkdir(parents=True)
+        for name in ('工资表.xlsx','蓝橙无单价&未绑名单.xlsx'):
+            book=Workbook();book.save(output/name);book.close()
+        (output/'private.json').write_text('internal proof')
+        state=dict(id=key,created_at='2026-11-02T01:00:00Z',plan={'city':'测试城','start':'2026-10-01'},
+                   result={'output':str(output),'delivery_layout':'payroll_workbooks_v1'})
+        with patch.object(payroll,'ROOT',self.root),patch.object(payroll,'delivery_store',return_value=self.store):
+            destination=payroll.publish_result('shared',folder,state)
+            self.assertEqual({p.name for p in destination.iterdir()},{'工资表.xlsx','蓝橙无单价&未绑名单.xlsx'})
+            target,_=delivery_bundle(self.store,'payroll:shared:'+key)
+            with zipfile.ZipFile(target) as archive:
+                self.assertEqual(set(archive.namelist()),{'工资表.xlsx','蓝橙无单价&未绑名单.xlsx'})
+            self.assertEqual(payroll.publish_result('shared',folder,state),destination)
+            self.assertTrue((output/'private.json').exists())
+            with self.store.db() as db:
+                self.assertEqual(len(db.execute('SELECT sha256 FROM artifacts WHERE task_key=?',('payroll:shared:'+key,)).fetchall()),2)
     def manager(self,flat=True):
         def executor(config,folder,log,cancelled,update):
             raw=folder/'原始资料/泉州/rider_info';raw.mkdir(parents=True)

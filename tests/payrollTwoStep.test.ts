@@ -5,8 +5,14 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {FlashPayrollWorkbench,PayrollQueueTable,PayrollTaskActivity} from '../src/components/FlashPayrollWorkbench';
 import {hasFullPayrollPreparation,legacyPayrollTask,type PayrollQueueTask} from '../src/lib/payrollQueue';
 
-const props:any={config:{payrollSourceMode:'fengshen'},onConfigChange:()=>{},progress:0,logs:[],apiFetch:async()=>new Response('{"tasks":[]}'),isRunning:false,onRun:()=>{},onOpenDownloads:()=>{},onOpenConnections:()=>{},onOpenDeductions:()=>{},onOtherMode:()=>{},onPreparationChange:()=>{},onUploadFiles:async()=>{},uploadExtracted:async()=>null};
+const props:any={config:{payrollSourceMode:'fengshen'},onConfigChange:()=>{},progress:0,logs:[],apiFetch:async()=>new Response('{"tasks":[]}'),isRunning:false,onRun:()=>{},onOpenDownloads:()=>{},onOpenConnections:()=>{},onOpenFengshenLogin:()=>{},onOpenDeductions:()=>{},onOtherMode:()=>{},onPreparationChange:()=>{},onUploadFiles:async()=>{},uploadExtracted:async()=>null};
 const plan={city:'深圳',start:'2026-10-01',end:'2026-10-15',month:'2026-10',applicants:3};
+
+test('payroll verification stays visible with a direct reopen action while the original task waits',()=>{
+ const html=renderToStaticMarkup(React.createElement(FlashPayrollWorkbench,{...props,payrollPreparation:{id:'a'.repeat(32),mode:'fengshen',status:'preparing',plan,items:{},jobs:[],execution:{waiting_login:true,waiting_verification:true,phase:'waiting_manual'}}}));
+ assert.match(html,/等待骑手信息导出验证/);assert.match(html,/打开验证码窗口/);assert.match(html,/收起验证窗口会保留等待/);
+ assert.doesNotMatch(html,/下载结果|重试并继续/);
+});
 
 test('multiple templates remain available while a historical automatic task is running',()=>{
  const html=renderToStaticMarkup(React.createElement(FlashPayrollWorkbench,{...props,isRunning:true,payrollPreparation:{id:'a'.repeat(32),mode:'fengshen',status:'preparing',plan,items:{},jobs:[]}}));

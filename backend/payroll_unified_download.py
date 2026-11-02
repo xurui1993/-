@@ -100,11 +100,12 @@ def execute(config, run_dir, log, cancelled, update_item, runner_factory=None):
                 if final:
                     log(f"【{description['city']} · {description['dataset']}】{reason}")
                     update_item({**description,'status':'error','phase':'failed','error':reason})
-    # Isolate each optional source. Authentication for payment binding must not
-    # cancel penalty, monthly bills or Blue Orange price collection.
-    batches=[['delivery_fee']]+[[kind] for kind in config['datasets'] if kind!='delivery_fee']
+    # Ask for the rider export verification while the user is still present.
+    priority=[kind for kind in ('payment_binding','delivery_fee') if kind in config['datasets']]
+    batches=[[kind] for kind in priority+ [kind for kind in config['datasets'] if kind not in priority]]
     for datasets in batches:
         mandatory=datasets==['delivery_fee']
+        wait_for_binding=datasets==['payment_binding']
         for scope,agency in scopes:
             _checkpoint(cancelled)
             if agency is not None and datasets==['lanorange_part_price']:continue
@@ -137,7 +138,10 @@ def execute(config, run_dir, log, cancelled, update_item, runner_factory=None):
             def changed(event):
                 nonlocal authentication_needed
                 if event.get('_run_event'):
-                    if event.get('status')=='waiting_login' and not mandatory:
+                    if event.get('status')=='waiting_login' and wait_for_binding:
+                        authentication_needed=True
+                        update_item({**event,'payroll_verification_required':True})
+                    elif event.get('status')=='waiting_login' and not mandatory:
                         authentication_needed=True
                         for description in child_requested:
                             remember_failure(_item_key(description),'需要完成平台验证' if event.get('phase')=='waiting_manual' else '需要登录来源平台')
@@ -148,7 +152,13 @@ def execute(config, run_dir, log, cancelled, update_item, runner_factory=None):
                 for info in event.get('files',[]):
                     path=(child_dir/info['relative_path']).resolve()
                     if path.is_relative_to(child_dir.resolve()) and path.is_file() and path not in available.setdefault(key,[]):available[key].append(path)
-                if event.get('status')=='waiting_login' and not mandatory:
+                if wait_for_binding and event.get('status') in ('waiting_login','running'):
+                    if event['status']=='waiting_login':authentication_needed=True
+                    # Dependency events belong to the public payment-binding item.
+                    for description in child_requested:
+                        update_item({**description,'status':event['status'],'phase':event.get('phase','preparing'),
+                                     **({'payroll_verification_required':True} if event['status']=='waiting_login' else {})})
+                elif event.get('status')=='waiting_login' and not mandatory:
                     authentication_needed=True
                     for description in child_requested:
                         remember_failure(_item_key(description),'需要完成平台验证' if event.get('phase')=='waiting_manual' else '需要登录来源平台')
@@ -169,6 +179,9 @@ def execute(config, run_dir, log, cancelled, update_item, runner_factory=None):
                 if cancelled.is_set():raise DownloadCancelled('任务已停止')
                 for description in child_requested:
                     if _item_key(description) not in available:remember_failure(_item_key(description),source_reason(exc))
+            if wait_for_binding and authentication_needed and any(_item_key(description) not in available for description in child_requested):
+                from parttime_source import SourceError
+                raise SourceError('骑手支付绑定的平台验证或导出未完成，本次未生成工资表；已有资料保留')
             for description in child_requested:
                 key=_item_key(description)
                 if key not in available and key in failures:

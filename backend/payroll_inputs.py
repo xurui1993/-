@@ -103,7 +103,14 @@ def publish_result(wid, folder, state):
     allowed=(Path(ROOT)/'backend/.local_downloads/workspaces/payroll'/wid/state['id'],Path(ROOT)/'outputs/payroll_batches'/wid/state['id'])
     if not any(output.is_relative_to(base.resolve()) for base in allowed) or output.is_symlink():
         raise SourceError('核算结果不在本批次目录内')
-    destination=external_delivery(key,state['created_at'],'薪资核算_'+state['plan']['city']+'_'+state['plan']['start'][:7],output,store=store)
+    label='薪资核算_'+state['plan']['city']+'_'+state['plan']['start'][:7]
+    if state['result'].get('delivery_layout') == 'payroll_workbooks_v1':
+        from payroll_review import payroll_workbooks
+        entries=[dict(run_id=key,id=role,path=str(path),name=path.name,city='',dataset=label)
+                 for role,path in zip(('payroll','exceptions'),payroll_workbooks(output))]
+        destination=store.publish(key,state['created_at'],label,entries,include_manifest=False)
+    else:
+        destination=external_delivery(key,state['created_at'],label,output,store=store)
     state['result']['output']=str(destination);save(folder,state)
     return destination
 
@@ -711,6 +718,7 @@ async def _run_payroll(config, request, folder, state, cancelled, *, context=Non
             progress = [(run['id'], run['status'], run.get('phase'), run.get('progress')) for run in runs], materials
             if progress != last:
                 state['execution'] = {'waiting_login': any(run['status'] == 'waiting_login' for run in runs),
+                                      'waiting_verification': any(run['status'] == 'waiting_login' and run.get('phase') == 'waiting_manual' for run in runs),
                                       'phase': '；'.join(str(run.get('phase') or run['status']) for run in runs)}
                 state['downloads'] = materials
                 save(folder, state)
@@ -731,6 +739,8 @@ async def _run_payroll(config, request, folder, state, cancelled, *, context=Non
         save(folder, state)
         yield 'data: ' + json.dumps({'type':'payroll_preparation','preparation':public(state)},ensure_ascii=False) + '\n\n'
         await asyncio.to_thread(collect_finished, folder, state, manager)
+        if any(run.get('payroll_verification_required') for run in runs) and state['items']['payment_binding']['status'] != 'ready':
+            raise SourceError('骑手支付绑定的平台验证或导出未完成，本次未生成工资表；已有资料保留')
         state['downloads'] = material_progress(state, runs)
         save(folder, state)
         state.pop('execution', None)
@@ -828,7 +838,8 @@ async def _run_payroll(config, request, folder, state, cancelled, *, context=Non
                     save(folder, state)
                 review = build_review(state, result.get('stats'), application)
                 result['review_summary'] = review
-                state['result'] = {'output': result.get('out_file'), 'input_hashes_verified': not relaxed, 'review_summary': review}
+                state['result'] = {'output': result.get('out_file'), 'input_hashes_verified': not relaxed, 'review_summary': review,
+                                   'delivery_layout':'payroll_workbooks_v1'}
                 save(folder, state)
                 output = Path(result.get('out_file') or '')
                 if result.get('out_file') and output.is_dir():
@@ -838,7 +849,6 @@ async def _run_payroll(config, request, folder, state, cancelled, *, context=Non
                         review['export_error'] = '复核清单导出未完成，请在批次页面查看摘要并复核原工作簿'
                         save(folder, state)
                         yield log_event(review['export_error'], 'WARN')
-                    atomic_json(output / ('核算资料清单_' + state['id'][:8] + '.json'), state)
                 try:
                     destination=publish_result(wid,folder,state)
                     result['out_file']=str(destination)

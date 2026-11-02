@@ -1,10 +1,14 @@
 """Explain existing payroll evidence; never change salary calculations or approve it."""
-import csv
 import datetime as dt
+import os
 from pathlib import Path
+import posixpath
+import uuid
+from xml.dom import minidom
+from xml.etree import ElementTree as ET
+import zipfile
 
 from openpyxl import load_workbook
-from fengshen_bill import atomic_json
 from parttime_source import identifier
 
 METRICS = (
@@ -89,29 +93,124 @@ def build_review(state, stats, application=None):
 
 
 def write_review(output, summary):
-    output = Path(output)
-    atomic_json(output / '核算复核摘要.json', summary)
-    # Values can include user-controlled filenames. Keep CSV cells literal.
-    def literal(value):
-        text = str(value) if value is not None else '未统计'
-        return "'" + text if text.lstrip().startswith(('=', '+', '-', '@')) else text
-    with (output / '核算复核清单.csv').open('w', encoding='utf-8-sig', newline='') as target:
-        writer = csv.writer(target)
-        def row(*values):
-            writer.writerow([literal(value) for value in values])
-        row('类别', '项目', '数值或状态', '口径与复核位置')
-        row('范围', '城市与业务周期', summary['city'], summary['start'] + ' 至 ' + summary['end'])
-        row('范围', '核算批次', summary['batch_id'], '')
-        row('结论', '业务复核', '待人工复核', summary['money_check'])
-        for metric in summary['metrics']:
-            row('统计', metric['label'], metric['value'], metric['note'])
-        for issue in summary['issues']:
-            row('待核对', issue['label'], issue.get('count', '需确认'), issue.get('location', '资料清单'))
-            for duplicate in issue.get('rows', []):
-                row('申请行', '完全相同的申请记录', duplicate['row'], '与第' + str(duplicate['same_as']) + '行相同；不自动删除')
-        row('凭据', '扣款配置内容标识', summary['deduction_version'], summary['input_check'])
-        row('凭据', summary['template']['name'], summary['template']['sha256'], '申请名单')
-        for source in summary['sources']:
-            row('来源', source['label'], source['status'], '')
-            for file in source['files']:
-                row('来源文件', file['name'], file['sha256'], source['label'])
+    main, _ = payroll_workbooks(output)
+    _append_review_sheet(main, review_rows(summary))
+
+
+def payroll_workbooks(output):
+    """Only new calculation directories use this two-attachment contract."""
+    paths = sorted(path for path in Path(output).rglob('*.xlsx') if path.is_file() and not path.is_symlink() and not path.name.startswith(('~$', '.')))
+    special = [path for path in paths if '蓝橙无单价&未绑名单' in path.name]
+    main = [path for path in paths if path not in special]
+    if len(main) != 1 or len(special) != 1:
+        raise ValueError('核算结果应包含一份工资表和一份蓝橙无单价&未绑名单')
+    return main[0], special[0]
+
+
+def provider(kind):
+    if kind == 'lanorange_part_price':
+        return '蓝橙后台'
+    if kind in ('delivery_fee', 'penalty', 'rider_monthly', 'fraud', 'problem'):
+        return '风神后台'
+    return '系统核算'
+
+
+def review_rows(summary):
+    system = '系统核算'
+    rows = [('类别', '提供方', '项目', '数值或状态', '口径与复核位置'),
+            ('范围', system, '城市与业务周期', summary['city'], summary['start'] + ' 至 ' + summary['end']),
+            ('范围', system, '核算批次', '本次核算', '批次编号保存在系统内部记录'),
+            ('结论', system, '业务复核', '待人工复核', summary['money_check'])]
+    for metric in summary['metrics']:
+        rows.append(('统计', system, metric['label'], metric['value'], metric['note']))
+    for issue in summary['issues']:
+        kind = next((source['kind'] for source in summary['sources'] if issue['code'] in ('omitted_' + source['kind'], 'source_' + source['kind'])), '')
+        rows.append(('待核对', provider(kind), issue['label'], issue.get('count', '需确认'), issue.get('location', '本表来源记录')))
+        for duplicate in issue.get('rows', []):
+            rows.append(('申请行', system, '完全相同的申请记录', duplicate['row'], '与第' + str(duplicate['same_as']) + '行相同；不自动删除'))
+    rows.append(('凭据', system, '扣款配置', '已保存本批配置' if summary['deduction_version'] else '未记录', summary['input_check'].replace('SHA256', '文件摘要')))
+    rows.append(('凭据', system, summary['template']['name'], '已保留原模板', '申请名单；文件摘要保存在系统内部记录'))
+    statuses = {'ready':'已提供', 'omitted':'未参与本次核算', 'pending':'等待获取', 'failed':'获取失败',
+                'unavailable':'资料不可用', 'running':'获取中', 'waiting_login':'等待平台验证', 'cancelled':'已停止'}
+    for source in summary['sources']:
+        rows.append(('来源', provider(source['kind']), source['label'], statuses.get(source['status'], '状态待核对'), ''))
+        for file in source['files']:
+            rows.append(('来源文件', provider(source['kind']), file['name'], '已保留原件', source['label'] + '；文件摘要保存在系统内部记录'))
+    return rows
+
+
+def _append_review_sheet(path, rows):
+    """Add one OOXML part without resaving salary cells, formulas or cached values."""
+    main_ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    rel_ns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    package_ns = 'http://schemas.openxmlformats.org/package/2006/relationships'
+    sheet = ET.Element('worksheet', xmlns=main_ns)
+    views = ET.SubElement(sheet, 'sheetViews')
+    view = ET.SubElement(views, 'sheetView', workbookViewId='0')
+    ET.SubElement(view, 'pane', ySplit='1', topLeftCell='A2', activePane='bottomLeft', state='frozen')
+    columns = ET.SubElement(sheet, 'cols')
+    for i, width in enumerate((12, 16, 42, 24, 85), 1):
+        ET.SubElement(columns, 'col', min=str(i), max=str(i), width=str(width), customWidth='1')
+    data = ET.SubElement(sheet, 'sheetData')
+    for i, values in enumerate(rows, 1):
+        row = ET.SubElement(data, 'row', r=str(i))
+        for j, value in enumerate(values):
+            cell = ET.SubElement(row, 'c', r=f'{chr(65+j)}{i}', t='n' if type(value) in (int, float) else 'inlineStr')
+            if type(value) in (int, float):
+                ET.SubElement(cell, 'v').text = str(value)
+            else:
+                # Inline strings keep user filenames literal, including leading '='.
+                ET.SubElement(ET.SubElement(cell, 'is'), 't').text = str(value) if value is not None else '未统计'
+    ET.SubElement(sheet, 'autoFilter', ref=f'A1:E{len(rows)}')
+    temporary = path.with_name('.复核_' + uuid.uuid4().hex + '.tmp')
+    try:
+        with zipfile.ZipFile(path) as original:
+            workbook = minidom.parseString(original.read('xl/workbook.xml'))
+            relationships = minidom.parseString(original.read('xl/_rels/workbook.xml.rels'))
+            types = minidom.parseString(original.read('[Content_Types].xml'))
+            sheets = workbook.getElementsByTagNameNS(main_ns, 'sheets')[0]
+            entries = list(sheets.getElementsByTagNameNS(main_ns, 'sheet'))
+            existing = next((entry for entry in entries if entry.getAttribute('name') == '核算复核清单'), None)
+            links = relationships.getElementsByTagNameNS(package_ns, 'Relationship')
+            if existing is not None:
+                link = next(link for link in links if link.getAttribute('Id') == existing.getAttributeNS(rel_ns, 'id'))
+                target = link.getAttribute('Target')
+                part = posixpath.normpath(target.lstrip('/') if target.startswith('/') else 'xl/' + target)
+                if not part.startswith('xl/worksheets/') or part not in original.namelist():
+                    raise ValueError('复核工作表位置无效，原工资表保留')
+            else:
+                number = max((int(entry.getAttribute('sheetId')) for entry in entries), default=0) + 1
+                part = f'xl/worksheets/payroll_review_{uuid.uuid4().hex}.xml'
+                used = {link.getAttribute('Id') for link in links}
+                rid = 'rIdPayrollReview'
+                while rid in used:rid += '_'
+                prefix = sheets.prefix + ':' if sheets.prefix else ''
+                entry = workbook.createElementNS(main_ns, prefix + 'sheet')
+                entry.setAttribute('name', '核算复核清单');entry.setAttribute('sheetId', str(number))
+                entry.setAttribute('xmlns:r', rel_ns);entry.setAttributeNS(rel_ns, 'r:id', rid)
+                sheets.appendChild(entry)
+                link = relationships.createElementNS(package_ns, 'Relationship')
+                link.setAttribute('Id', rid);link.setAttribute('Type', rel_ns + '/worksheet');link.setAttribute('Target', part[3:])
+                relationships.documentElement.appendChild(link)
+                override = types.createElementNS(types.documentElement.namespaceURI, 'Override')
+                override.setAttribute('PartName', '/' + part)
+                override.setAttribute('ContentType', 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml')
+                types.documentElement.appendChild(override)
+            replacements = {'xl/workbook.xml':workbook.toxml(encoding='utf-8'),
+                            'xl/_rels/workbook.xml.rels':relationships.toxml(encoding='utf-8'),
+                            '[Content_Types].xml':types.toxml(encoding='utf-8'), part:ET.tostring(sheet, encoding='utf-8', xml_declaration=True)}
+            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as result:
+                result.comment = original.comment
+                for info in original.infolist():
+                    if info.filename in replacements:
+                        result.writestr(info, replacements.pop(info.filename))
+                    else:
+                        with original.open(info) as source, result.open(info, 'w', force_zip64=True) as target:
+                            import shutil
+                            shutil.copyfileobj(source, target, length=1024*1024)
+                for name, content in replacements.items():result.writestr(name, content)
+        with zipfile.ZipFile(temporary) as check:
+            if check.testzip() is not None:raise ValueError('复核工作表写入校验失败')
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)

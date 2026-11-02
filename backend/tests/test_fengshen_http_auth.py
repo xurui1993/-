@@ -267,6 +267,33 @@ class BrokerWorkerTests(unittest.TestCase):
         self.assertEqual(self.result, "123456")
         self.assertEqual(self.client.request_json.call_count, 1)
 
+    def test_payroll_export_keeps_waiting_past_login_timeout_without_sending_sms(self):
+        self.worker.wait_export_indefinitely=True
+        self.worker.timeout=.02
+        self.start(export=True)
+        self.thread.join(.08)
+        self.assertTrue(self.thread.is_alive())
+        self.client.request_json.assert_not_called()
+        self.client.request_json.return_value={'code':200,'data':True}
+        self.assertTrue(self.command('send')['ok'])
+        self.assertTrue(self.command('verify','123456')['ok'])
+        self.thread.join(2)
+        self.assertEqual(self.result,'123456')
+
+    def test_export_uses_a_fresh_challenge_after_a_previously_hidden_login(self):
+        original=self.broker.operation
+        challenges=[]
+        from contextlib import contextmanager
+        @contextmanager
+        def operation(*args,**kwargs):
+            with original(*args,**kwargs):
+                challenges.append(self.broker.status('tester')['challenge_id'])
+                yield self.broker
+        with patch.object(self.broker,'operation',operation):
+            self.start(export=True)
+        self.assertNotEqual(self.broker.status('tester')['challenge_id'],challenges[0])
+        self.stop()
+
     def test_cancellation_does_not_save(self):
         self.start()
         self.stop()

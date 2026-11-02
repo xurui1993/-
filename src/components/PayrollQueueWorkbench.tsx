@@ -11,7 +11,7 @@ import {readDownloadResponse,saveDownloadBlob} from '../lib/outputDownload';
 import {businessLogEntries} from '../lib/payrollBusinessLogs';
 import {hasFullPayrollPreparation,legacyPayrollTask,payrollElapsed,payrollModeName,payrollQueueRunning,payrollQueueStatus,type PayrollQueueTask} from '../lib/payrollQueue';
 
-type Props=Pick<CorePageProps,'config'|'onConfigChange'|'progress'|'progressText'|'logs'|'payrollPreparation'|'apiFetch'|'onPreparationChange'|'onUploadFiles'|'onRun'|'onOpenDownloads'|'onOpenConnections'|'onOpenDeductions'|'onOpenSettings'|'uploadExtracted'>&{isRunning:boolean;onOtherMode:(mode:'fengshen'|'manual'|'xiaoxiang')=>void};
+type Props=Pick<CorePageProps,'config'|'onConfigChange'|'progress'|'progressText'|'logs'|'payrollPreparation'|'apiFetch'|'onPreparationChange'|'onUploadFiles'|'onRun'|'onOpenDownloads'|'onOpenConnections'|'onOpenFengshenLogin'|'onOpenDeductions'|'onOpenSettings'|'uploadExtracted'>&{isRunning:boolean;onOtherMode:(mode:'fengshen'|'manual'|'xiaoxiang')=>void};
 const API='/api/parttime/queue';
 
 export function PayrollQueueTable({tasks,selectedId,checked,onSelect,onCheck,onCheckAll,onStop,onRemove,onDownload,onOpenDirectory,onConfirm,onRestore,busy=false,hidden=false}:{
@@ -61,7 +61,7 @@ function formatLogTime(value:string){
   return value.match(/(?:T|\s)(\d{2}:\d{2}(?::\d{2})?)/)?.[1]||value;
 }
 
-export function FlashPayrollWorkbench({config,onConfigChange,uploadExtracted,isRunning,progress,progressText,logs,payrollPreparation:value,apiFetch,onPreparationChange,onUploadFiles,onRun,onOpenDownloads,onOpenConnections,onOpenDeductions,onOpenSettings,onOtherMode}:Props){
+export function FlashPayrollWorkbench({config,onConfigChange,uploadExtracted,isRunning,progress,progressText,logs,payrollPreparation:value,apiFetch,onPreparationChange,onUploadFiles,onRun,onOpenDownloads,onOpenConnections,onOpenFengshenLogin,onOpenDeductions,onOpenSettings,onOtherMode}:Props){
   const [tasks,setTasks]=useState<PayrollQueueTask[]>([]),[selectedId,setSelectedId]=useState(''),[checked,setChecked]=useState<string[]>([]);
   const [loading,setLoading]=useState(true),[uploading,setUploading]=useState(false),[busy,setBusy]=useState(false);
   const [error,setError]=useState(''),[loadError,setLoadError]=useState(''),[more,setMore]=useState(false),[templates,setTemplates]=useState(false),[hidden,setHidden]=useState(false);
@@ -153,7 +153,7 @@ export function FlashPayrollWorkbench({config,onConfigChange,uploadExtracted,isR
     </section>
     {selected&&<section className="pq-detail" aria-label="所选任务详情"><header className="pq-detail-heading"><div><span className="pq-eyebrow">所选任务</span><h3>{selected.template_name}</h3></div><span className={`pq-state is-${payrollQueueStatus(selected.status).tone}`}>{payrollQueueStatus(selected.status).label}</span></header>
       {selected.status==='error'&&<p className="pq-detail-note">任务已结束，具体原因见下方业务记录。</p>}
-      {selected.preparation?.execution?.waiting_login&&<p className="pq-message">本任务需要完成平台登录。<button className="wb-link" onClick={onOpenConnections}>完成平台登录</button></p>}
+      {selected.preparation?.execution?.waiting_login&&<p role="status" className="pq-message">{selected.preparation.execution.waiting_verification?'本任务正在等待骑手信息导出验证，完成后自动继续；收起验证窗口会保留等待。':'本任务正在等待平台登录，完成后自动继续。'}<button className="wb-link" onClick={selected.mode==='fengshen'?onOpenFengshenLogin:onOpenConnections}>{selected.preparation.execution.waiting_verification?'打开验证码窗口':'完成平台登录'}</button></p>}
       <PayrollTaskActivity logs={selected.logs?.length?selected.logs:selected.preparation?.execution_logs}/>
       {selected.preparation?.automatic_deductions&&<details className="pq-disclosure"><summary>本次扣款规则</summary><p className="pq-muted">沿用已有站点或城市配置，无配置站点按零扣款；不修改默认配置。</p><ul className="pq-rule-list">{selected.preparation.automatic_deductions.sources.map((entry,index)=><li key={index}><span>{entry.station.name}</span><small>{entry.source}</small></li>)}</ul></details>}
       {selected.status==='completed'&&<><p className="pq-detail-note">打开结果后，请在 Excel / WPS 中重算并复核。</p><details className="pq-disclosure"><summary>复核信息</summary><PayrollReviewSummary review={selected.preparation?.result?.review_summary}/></details></>}

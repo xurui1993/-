@@ -1133,6 +1133,8 @@ class DownloadManager:
         def update(run):
             if run["status"] in FINAL_STATUSES:
                 return
+            if change.get('payroll_verification_required') is True and run.get('task_kind') == 'payroll_source':
+                run['payroll_verification_required'] = True
             if change.get("_run_event") is True:
                 phase = change.get("phase")
                 if phase not in PHASES:
