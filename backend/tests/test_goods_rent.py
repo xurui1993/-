@@ -69,6 +69,15 @@ class GoodsRentTests(unittest.TestCase):
         book.close()
         self.assertEqual(rows[1][0], "深圳麻豆人-佳漾汇站（取分离）")
 
+    def test_exclusion_option_requests_all_teams_unless_checked(self):
+        for exclude in (False,True):
+            self.client.request_json=Mock(side_effect=[TEAMS,{'result':{'data':rent_workbook([ROWS[0]] if exclude else ROWS)}}])
+            result=self.collector.goods_rent(SimpleNamespace(**vars(PLAN),exclude_separation=exclude),self.root)
+            body=self.client.request_json.call_args_list[1].kwargs['body']
+            self.assertEqual(body['params']['goodsBusinessRentQueryDto']['teamIds'],[917580497] if exclude else [917580497,917580500])
+            self.assertEqual(result['rows'],1 if exclude else 2)
+            self.assertEqual(result['separation_mode'],'exclude' if exclude else 'all')
+
     def test_exclude_removes_separation_stations(self):
         result = self.collect(False)
         body = self.client.request_json.call_args_list[1].kwargs["body"]

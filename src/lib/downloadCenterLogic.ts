@@ -2,7 +2,7 @@ export interface DownloadUser { id: string; username: string; role: string; enab
 export type DownloadFetch = (url: string, init?: RequestInit) => Promise<Response>;
 export interface ItemSelection { city: string; dataset: string; start: string; end: string }
 export interface Recovery { mode: 'resume_existing' | 'retry_unsubmitted' | 'blocked'; reason: string }
-export interface CreateSelection { cities: string[]; datasets: string[]; start: string; end: string; refresh_history?: boolean; include_separation?: boolean; merchant_by_city?: boolean; lanorange_by_city?: boolean; lanorange_full_delivery?: boolean; task_kind?: 'download' | 'generate'; generation_target?: string }
+export interface CreateSelection { cities: string[]; datasets: string[]; start: string; end: string; refresh_history?: boolean; include_separation?: boolean; exclude_separation?: boolean; merchant_by_city?: boolean; lanorange_by_city?: boolean; lanorange_full_delivery?: boolean; task_kind?: 'download' | 'generate'; generation_target?: string }
 export interface RequestAttempt<T> { request_id: string; payload: T }
 // abnormal_riders（异常骑手整理生成表）只依赖蓝橙成品，交付口径与蓝橙一致。
 export const isBaize = (id: string) => id === 'baize_employees';
@@ -16,8 +16,7 @@ export function toggleDownloadDataset(values:string[],id:string){
   if(values.includes(id))return values.filter(value=>value!==id);
   if(isBaize(id))return [id];
   if(isXiaoxiang(id))return [...values.filter(isXiaoxiang), id];
-  if(isMerchant(id))return [...values.filter(isMerchant),id];
-  return [...values.filter(value=>!isBaize(value)&&!isXiaoxiang(value)&&!isMerchant(value)),id];
+  return [...values.filter(value=>!isBaize(value)&&!isXiaoxiang(value)),id];
 }
 export const isGlobalDataset = (id: string) => isBaize(id) || isLanorange(id);
 export const datasetGroup = (id: string) => isBaize(id) ? 'baize' : isXiaoxiang(id) ? 'xiaoxiang' : isLanorange(id) ? 'lanorange' : 'fengshen';
@@ -41,6 +40,7 @@ export function selectionKey(value: CreateSelection) {
     scope: value.lanorange_full_delivery ? 'full_delivery' : value.lanorange_by_city ? 'city' : 'all', ...(value.lanorange_by_city ? {cities: [...value.cities].sort()} : {}) });
   return JSON.stringify({ cities: [...value.cities].sort(), datasets: [...value.datasets].sort(), start: value.start, end: value.end,
     ...(value.refresh_history ? { refresh_history: true } : {}), ...(value.include_separation ? { include_separation: true } : {}),
+    ...(value.exclude_separation !== undefined ? { exclude_separation: value.exclude_separation } : {}),
     ...(value.lanorange_by_city ? {lanorange_by_city: true} : {}), ...(value.lanorange_full_delivery ? {lanorange_full_delivery:true} : {}) });
 }
 export function newRequestId() {

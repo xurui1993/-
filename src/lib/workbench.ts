@@ -779,15 +779,15 @@ const DATASET_CARD_META_MAP: Record<string, Omit<DatasetCardMeta, 'id'>> = {
   // 风神数据
   invitation_records: {
     title: '邀请记录（全量）',
-    scopeTag: '商家·全量',
-    tone: 'merchant',
-    desc: '所选城市商家端拉新邀请全量快照',
+    scopeTag: '城市·全量',
+    tone: 'city',
+    desc: '支持多选城市，分别下载各城市全部邀请记录',
   },
   attendance_detail: {
     title: '骑手出勤明细',
-    scopeTag: '商家·账期',
-    tone: 'merchant',
-    desc: '近90天站点骑手考勤与出勤天数表',
+    scopeTag: '城市·账期',
+    tone: 'city',
+    desc: '支持多选城市，按近90天内的日期下载各城市出勤明细',
   },
   delivery_fee: {
     title: '配送费',
@@ -1177,6 +1177,7 @@ export interface ExecutionRailSummaryInput {
   merchantDateValid: boolean;
   validDates: boolean;
   includeSeparation: boolean;
+  excludeSeparation?: boolean;
   subitemCount: number;
   submitReady: boolean;
 }
@@ -1209,6 +1210,7 @@ export function buildExecutionRailSummary(input: ExecutionRailSummaryInput): Exe
     merchantDateValid,
     validDates,
     includeSeparation,
+    excludeSeparation,
     subitemCount,
     submitReady,
   } = input;
@@ -1252,7 +1254,7 @@ export function buildExecutionRailSummary(input: ExecutionRailSummaryInput): Exe
 
   if (!noCity) {
     thirdRowLabel = '站点规则';
-    thirdRowValue = merchantOnly ? '全部站点' : includeSeparation ? '仅取分离' : '排除取分离';
+    thirdRowValue = merchantOnly ? '全部站点' : excludeSeparation !== undefined ? (excludeSeparation ? '排除取分离' : '全部站点（含取分离）') : includeSeparation ? '仅取分离' : '排除取分离';
   } else {
     thirdRowLabel = '交付规格';
     thirdRowValue = baizeOnly

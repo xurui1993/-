@@ -48,7 +48,7 @@ class SharedListTests(unittest.TestCase):
         self.assertEqual(center.listing(request())['total'],4)
 
     def test_mixed_active_waiting_and_unknown_rejections_are_atomic(self):
-        for key in ['b','c','d','missing']:
+        for key in ['b','c','missing']:
             with self.assertRaises(HTTPException):center.visibility({'ids':['a',key]},request('POST'))
             self.assertEqual(center.hidden_ids(),set())
 
@@ -58,6 +58,49 @@ class SharedListTests(unittest.TestCase):
         self.assertNotIn('a',[r['id'] for r in center.listing(request())['records']])
         self.rows[0]['status']='running'
         self.assertIn('a',[r['id'] for r in center.listing(request())['records']])
+
+    def test_stop_then_hide_waits_for_ack_and_can_restore(self):
+        def stop(row,_):
+            next(r for r in self.rows if r['id']==row['id'])['status']='cancelling'
+        with patch.object(center,'stop_record',side_effect=stop):
+            center.visibility({'ids':['b'],'stop_first':True},request('POST'))
+        self.assertIn('b',[r['id'] for r in center.listing(request())['records']])
+        self.assertNotIn('b',center.hidden_ids())
+        self.rows[1]['status']='cancelled'
+        self.assertNotIn('b',[r['id'] for r in center.listing(request())['records']])
+        self.assertIn('b',[r['id'] for r in center.listing(request(query='archived=1'))['records']])
+        center.visibility({'ids':['b'],'restore':True},request('POST'))
+        self.assertIn('b',[r['id'] for r in center.listing(request())['records']])
+
+    def test_waiting_payroll_can_be_hidden_and_restored(self):
+        self.rows.append(record('payroll_x','awaiting_confirmation'))
+        center.visibility({'ids':['payroll_x']},request('POST'))
+        self.assertNotIn('payroll_x',[r['id'] for r in center.listing(request())['records']])
+        center.visibility({'ids':['payroll_x'],'restore':True},request('POST'))
+        self.assertIn('payroll_x',[r['id'] for r in center.listing(request())['records']])
+
+    def test_stop_dispatches_to_existing_task_managers(self):
+        with patch('payroll_control.stop') as payroll,patch('payroll_inputs.workspace',return_value='shared'),patch('payroll_inputs.account',return_value='user'):
+            center.stop_record({'kind':'payroll','batch_id':'batch'},request('POST'))
+            payroll.assert_called_once_with('shared','batch','user')
+        with patch('lanorange_approvals.stop') as approval:
+            center.stop_record({'kind':'approval','price_id':'approval'},request('POST'))
+            self.assertEqual(approval.call_args.args[:2],('approval',{'confirm':True}))
+        with patch('lanorange_price_export.stop') as export:
+            center.stop_record({'kind':'price-export','price_id':'price'},request('POST'))
+            self.assertEqual(export.call_args.args[:2],('price',{}))
+        from unittest.mock import Mock
+        manager=Mock();manager.get_run.return_value={'status':'running'};manager.run_owner.return_value='user'
+        with patch('download_jobs.get_manager',return_value=manager),patch.object(center,'require_account',return_value={'owner':'user','role':'admin'}):
+            for kind in ('download','generate','payroll_source'):
+                center.stop_record({'kind':kind,'member_ids':['original','retry']},request('POST'))
+        self.assertEqual(manager.cancel.call_count,6)
+
+    def test_new_attempt_is_not_hidden_by_an_old_pending_stop(self):
+        with patch.object(center,'stop_record'):
+            center.visibility({'ids':['b'],'stop_first':True},request('POST'))
+        self.rows[1].update(status='success',member_ids=['b','new-attempt'])
+        self.assertIn('b',[r['id'] for r in center.listing(request())['records']])
 
     def test_completed_retry_between_polls_reappears(self):
         center.visibility({'ids':['a']},request('POST'))

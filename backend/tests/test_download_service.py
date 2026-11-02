@@ -44,6 +44,14 @@ class FakeRunner:
         return dict(dataset="agency_daily", agency_id=plan.agency_id, start=plan.start, end=plan.end,
                     status="success", files=[dict(path=source.name, **validate_bill_file(source))])
 
+    def merchant_source(self,kind,directory,start,end,resume=None,*,city,agency_id):
+        from openpyxl import Workbook
+        self.calls.append((city,kind,agency_id))
+        directory.mkdir(parents=True,exist_ok=True)
+        target=directory/'fixture.xlsx'
+        book=Workbook();book.active.append(['合成城市',city]);book.save(target);book.close()
+        return target
+
     def monthly(self, plan, directory):
         self.calls.append((plan.city, "monthly", plan.month))
         directory.mkdir(parents=True)
@@ -150,6 +158,21 @@ class DownloadServiceTests(unittest.TestCase):
             self.assertTrue(output.is_file())
             self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), file['sha256'])
 
+    def test_city_bills_mix_with_invitation_and_attendance_for_multiple_cities(self):
+        config=self.config(['delivery_fee','invitation_records','attendance_detail'])
+        config['cities']=['泉州','上海']
+        self.assertTrue(config['merchant_by_city'])
+        files,updates,_=self.execute(config)
+        self.assertEqual(len(files),6)
+        self.assertEqual({(f['city'],f['dataset']) for f in files},{(c,k) for c in config['cities'] for k in config['datasets']})
+        self.assertEqual(len(service._requested_items(config)),6)
+        for city in config['cities']:
+            self.assertTrue(any(call[:2]==(city,'attendance_detail') for call in self.runner.calls))
+
+    def test_mixed_attendance_rejects_today_and_dates_before_90_days(self):
+        for first,last in [('2026-09-01','2026-10-16'),('2026-01-01','2026-10-01')]:
+            with self.assertRaises(service.ValidationError):self.config(['delivery_fee','attendance_detail'],start=first,end=last)
+
     def test_flat_layout_moves_generated_artifact_and_retains_platform_sources(self):
         sources=Mock();sources.employees.return_value=Path('employees.xlsx');sources.proxies.return_value=Path('proxies.xlsx')
         config=self.config(['payment_binding'],start='2026-09-01',end='2026-09-30')
@@ -199,7 +222,25 @@ class DownloadServiceTests(unittest.TestCase):
         self.assertEqual(updates[-1]["status"], "success")
         self.assertTrue(all((self.root / "run" / f["relative_path"]).is_file() for f in files))
 
-    def test_separation_unchecked_excludes_separation_rows(self):
+    def test_new_exclusion_option_preserves_explicit_false_and_rejects_non_boolean(self):
+        self.assertIs(self.config(['delivery_fee'],exclude_separation=False)['exclude_separation'],False)
+        with self.assertRaises(service.ValidationError):self.config(['delivery_fee'],exclude_separation='false')
+
+    def test_unchecked_exclusion_keeps_all_delivery_rows(self):
+        import csv
+        files, _, _ = self.execute(self.config(['delivery_fee'],exclude_separation=False))
+        self.assertNotIn('separation_filter',files[0])
+        with open(self.root/'run'/files[0]['relative_path'],encoding='utf-8-sig',newline='') as stream:rows=list(csv.DictReader(stream))
+        self.assertEqual({row['团队名称'] for row in rows},{'泉州测试站','泉州测试站(取分离)'})
+
+    def test_checked_exclusion_keeps_only_ordinary_delivery_rows(self):
+        import csv
+        files, _, _ = self.execute(self.config(['delivery_fee'],exclude_separation=True))
+        self.assertEqual(files[0]['separation_filter']['rows_after'],1)
+        with open(self.root/'run'/files[0]['relative_path'],encoding='utf-8-sig',newline='') as stream:rows=list(csv.DictReader(stream))
+        self.assertEqual([row['团队名称'] for row in rows],['泉州测试站'])
+
+    def test_legacy_separation_unchecked_excludes_separation_rows(self):
         import csv
         files, _, _ = self.execute(self.config(["delivery_fee"]))
         proof = files[0]["separation_filter"]
@@ -259,6 +300,20 @@ class DownloadServiceTests(unittest.TestCase):
                                               threading.Event(), lambda *_: None, factory)
         self.assertEqual(len(files), 1)
         self.assertEqual(captured['teams'], {'test(取分离)'})
+
+    def test_new_exclusion_option_applies_same_scope_to_payment_binding_sources(self):
+        import csv
+        sources=Mock();sources.employees.return_value=Path('employee.xlsx');sources.proxies.return_value=Path('proxy.xlsx')
+        for exclude in (False,True):
+            captured={}
+            config=service.validate_request({'cities':['泉州'],'datasets':['payment_binding'],'start':'2026-09-20','end':'2026-09-30','exclude_separation':exclude})
+            config['owner']='test'
+            def generate(paths,employees,proxies,plan,raw,log,cancelled):
+                with open(paths['rider_detail'],encoding='utf-8-sig',newline='') as stream:captured['teams']={row['团队名称'] for row in csv.DictReader(stream)}
+                path=Path(raw)/'generated.xlsx';path.write_bytes(b'fixture');return path,{}
+            with patch('binding_sources_http.BindingSources',return_value=sources),patch('binding_download.generate_binding',side_effect=generate):
+                service.execute_downloads(config,self.root/('binding-'+str(exclude)),lambda *_:None,threading.Event(),lambda *_:None,lambda *_:contextlib.nullcontext(self.runner))
+            self.assertEqual(captured['teams'],{'test'} if exclude else {'test','test(取分离)'})
 
     def test_monthly_only_downloads_two_whole_months(self):
         files, _, _ = self.execute(self.config(["rider_monthly"]))

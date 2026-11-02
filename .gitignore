@@ -13,3 +13,4 @@ backend/.local_downloads/
 .env
 gateway/template.zip
 *.part
+backend/tests/tmp*/

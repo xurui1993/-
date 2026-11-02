@@ -52,6 +52,19 @@ class Client:
 
 
 class CatalogTests(unittest.TestCase):
+    def test_separation_reads_same_city_service_group_and_restores_original(self):
+        client=Client();original=client.request_json
+        def query(method,url,**kwargs):
+            if url==AGENCIES_URL:
+                data=original(method,url,**kwargs);data['data'].append({'agencyId':'030','agencyCityName':'测试市','agencySubTypeName':'物流服务商'});return data
+            if client.current=='030':return {'result':{'data':[{'id':'003','agencyId':'030','team_name':'测试(取分离)'}]}}
+            return original(method,url,**kwargs)
+        client.request_json=query
+        with patch.object(stations,'_fengshen_client',return_value=client):result=stations.catalog('fengshen','020',True,True)
+        split=next(s for s in result['stations'] if s.get('separation'))
+        self.assertEqual((split['city_id'],split['agency_id'],split['id']),('020','030','003'))
+        self.assertEqual(client.current,'010');self.assertTrue(client.closed)
+
     def setUp(self):
         stations._cache.clear()
         stations._versions.clear()

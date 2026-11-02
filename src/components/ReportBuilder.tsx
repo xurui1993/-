@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, FileSpreadsheet, RefreshCw, Search } from 'lucide-react';
 import { monthBounds, reportRange, type ReportDefinition } from '../lib/reportBuilder';
 import { WorkbenchDatePicker } from './WorkbenchDatePicker';
+import {useStationDirectory} from '../lib/useStationDirectory';
+import {CityStationCount} from './CityStationCount';
 
 interface City { id:string; name:string; disabled?:boolean; note?:string }
 interface Props {
@@ -16,6 +18,7 @@ interface Props {
 
 /** Scope controls follow the server catalog; report-specific business logic stays in its generator. */
 export function ReportBuilder(props:Props) {
+  const stationDirectory=useStationDirectory('fengshen');
   const {reports,selectedId,cities,selectedCities,locked}=props;
   const report=reports.find(item=>item.id===selectedId);
   const range=reportRange(report,props.start,props.end,props.today);
@@ -66,9 +69,9 @@ export function ReportBuilder(props:Props) {
               {cityOpen&&<div className="rb-city-picker">
                 <label className="rb-city-search"><Search size={14}/><input autoFocus aria-label="搜索报表城市" placeholder="搜索城市" value={citySearch} onChange={e=>setCitySearch(e.target.value)}/></label>
                 <div className="rb-city-tools"><button type="button" disabled={locked||!selectable.length} onClick={()=>props.onCities(selectable.map(city=>city.name))}>全选可用城市</button><button type="button" disabled={locked} onClick={()=>props.onCities([])}>清空</button><button type="button" disabled={locked||props.refreshing} onClick={props.onRefreshCities}><RefreshCw size={12}/>{props.refreshing?'刷新中…':'刷新城市'}</button></div>
-                <div className="rb-city-options" role="group" aria-label="报表城市列表">{cities.filter(city=>city.name.includes(citySearch.trim())).map(city=><label key={city.id} title={city.note}><input type="checkbox" disabled={locked||city.disabled} checked={!city.disabled&&selectedCities.includes(city.name)} onChange={()=>chooseCity(city.name)}/><span>{city.name}</span>{city.disabled&&<small>{city.note||'不可用'}</small>}</label>)}</div>
+                <div className="rb-city-options" role="group" aria-label="报表城市列表">{cities.filter(city=>city.name.includes(citySearch.trim())).map(city=><label key={city.id} title={city.note}><input type="checkbox" disabled={locked||city.disabled} checked={!city.disabled&&selectedCities.includes(city.name)} onChange={()=>chooseCity(city.name)}/><span>{city.name}</span><CityStationCount directory={stationDirectory.data} city={city.id}/>{city.disabled&&<small>{city.note||'不可用'}</small>}</label>)}</div>
                 {!selectable.length&&<p className="rb-muted">暂无可用城市，请刷新城市或检查平台连接。</p>}
-                <div className="rb-city-picker-footer"><span>已选 {selectedCities.length} 城</span><button type="button" onClick={()=>setCityOpen(false)}>完成</button></div>
+                <div className="rb-city-picker-footer"><span>已选 {selectedCities.length} 城</span><button type="button" onClick={stationDirectory.refresh}>刷新站点数</button><button type="button" onClick={()=>setCityOpen(false)}>完成</button></div>
               </div>}
             </div>
             <div className="rb-field rb-period-field">

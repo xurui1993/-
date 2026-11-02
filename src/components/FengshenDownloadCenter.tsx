@@ -1,4 +1,6 @@
 import { CollectionScope } from './CollectionScope';
+import {useStationDirectory} from '../lib/useStationDirectory';
+import {CityStationCount} from './CityStationCount';
 import { TaskFlowSteps } from './TaskFlowSteps';
 import { recoverySummary } from '../lib/downloadCenterLogic';
 import { readDownloadResponse, saveDownloadBlob, downloadOutput, downloadErrorMessage } from '../lib/outputDownload';
@@ -79,6 +81,7 @@ interface DownloadRun {
   lanorange_full_delivery?: boolean;
   refresh_history?: boolean;
   include_separation?: boolean;
+  exclude_separation?: boolean;
   order_progress?: { batches?: number; batch?: number; obtained?: number; downloaded?: number; processed?: number;
     cached_days?: number; download_bytes?: number; processed_rows?: number; elapsed_seconds?: number; stage?: string };
   summary_progress?: { stage?: 'merging' | 'completed' | 'failed'; current?: number; total?: number; city?: string; month?: string };
@@ -245,7 +248,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const [end, setEnd] = useState(() => taskKind === 'generate' ? computeBillingPeriodRange('last_full_month', shanghaiToday()).end : shanghaiToday());
   const [refreshHistory, setRefreshHistory] = useState(false);
   const [includeSeparation, setIncludeSeparation] = useState(false);
-  const scopeSelections = useRef<Record<string, {cities:string[];start:string;end:string;includeSeparation:boolean}>>({});
+  const [excludeSeparation, setExcludeSeparation] = useState(true);
+  const scopeSelections = useRef<Record<string, {cities:string[];start:string;end:string;includeSeparation:boolean;excludeSeparation:boolean}>>({});
   const [runs, setRuns] = useState<DownloadRun[]>([]);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
   const [citySearch, setCitySearch] = useState('');
@@ -255,7 +259,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   useEffect(() => {
     if (!prefill || !prefill.token) return;
     const target = prefill.taskKind === 'generate' ? 'generate' : selectionScope;
-    scopeSelections.current[target] = {cities:prefill.cities || cities, start:prefill.start || start, end:prefill.end || end, includeSeparation};
+    scopeSelections.current[target] = {cities:prefill.cities || cities, start:prefill.start || start, end:prefill.end || end, includeSeparation,excludeSeparation};
     if (prefill.cities && prefill.cities.length) {
       setCities(prefill.cities);
     }
@@ -296,18 +300,18 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   useEffect(() => {
     if (previousKind.current === selectionScope || createAttempt.current) return;
     const previous = previousKind.current; previousKind.current = selectionScope;
-    scopeSelections.current[previous] = {cities:[...cities],start,end,includeSeparation};
+    scopeSelections.current[previous] = {cities:[...cities],start,end,includeSeparation,excludeSeparation};
     const savedScope = scopeSelections.current[selectionScope];
     if (savedScope) {
-      setCities(savedScope.cities); setStart(savedScope.start); setEnd(savedScope.end); setIncludeSeparation(savedScope.includeSeparation);
+      setCities(savedScope.cities); setStart(savedScope.start); setEnd(savedScope.end); setIncludeSeparation(savedScope.includeSeparation); setExcludeSeparation(savedScope.excludeSeparation);
     } else if (taskKind === 'generate') {
       const period = computeBillingPeriodRange('last_full_month', shanghaiToday());
-      setCities([]); setStart(period.start); setEnd(period.end); setIncludeSeparation(false);
+      setCities([]); setStart(period.start); setEnd(period.end); setIncludeSeparation(false); setExcludeSeparation(true);
     } else {
       const yesterday = new Date(shanghaiToday() + 'T00:00:00Z'); yesterday.setUTCDate(yesterday.getUTCDate() - 1);
       const lastDay = yesterday.toISOString().slice(0, 10);
       setCities([]); setStart(platform === 'xiaoxiang' ? lastDay : `${shanghaiToday().slice(0, 7)}-01`);
-      setEnd(platform === 'xiaoxiang' ? lastDay : shanghaiToday()); setIncludeSeparation(false);
+      setEnd(platform === 'xiaoxiang' ? lastDay : shanghaiToday()); setIncludeSeparation(false); setExcludeSeparation(true);
     }
     setDatasets(values => {
       categorySelections.current[previous] = values;
@@ -318,7 +322,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   }, [selectionScope]);
   useEffect(() => {
     const previous = createAttempt.current?.payload;
-    if (previous) { setCities(previous.cities); setDatasets(previous.datasets); setStart(previous.start); setEnd(previous.end); setRefreshHistory(!!previous.refresh_history); setIncludeSeparation(!!previous.include_separation); }
+    if (previous) { setCities(previous.cities); setDatasets(previous.datasets); setStart(previous.start); setEnd(previous.end); setRefreshHistory(!!previous.refresh_history); setIncludeSeparation(!!previous.include_separation); setExcludeSeparation(previous.exclude_separation??true); }
   }, []);
   const [uncertainRetry, setUncertainRetry] = useState(!!retryAttempt.current);
   const [retryPending, setRetryPending] = useState(false);
@@ -356,6 +360,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
     }
     return data;
   }, []);
+  const stationDirectory=useStationDirectory(platform==='xiaoxiang'?'xiaoxiang':'fengshen',apiRef.current,platform!=='baize');
 
   useEffect(() => {
     const controller = new AbortController();
@@ -473,6 +478,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const dailyDate = yesterday.toISOString().slice(0, 10);
   const blueOnly = platform === 'lanorange' || (datasets.length > 0 && datasets.every(isGlobalDataset));
   const merchantOnly=datasets.length>0&&datasets.every(isMerchant),merchantSnapshotOnly=merchantOnly&&!datasets.includes('attendance_detail');
+  const hasAttendance=datasets.includes('attendance_detail');
   const noCity=blueOnly||xiaoxiangOnly||baizeOnly,noDate=blueOnly||baizeOnly||merchantSnapshotOnly||archiveOnly;
   const attendanceDateMax=new Date(shanghaiToday()+'T00:00:00Z');attendanceDateMax.setUTCDate(attendanceDateMax.getUTCDate()-1);const attendanceLast=attendanceDateMax.toISOString().slice(0,10);
   const attendanceDateMin=new Date(shanghaiToday()+'T00:00:00Z');attendanceDateMin.setUTCDate(attendanceDateMin.getUTCDate()-90);const attendanceFirst=attendanceDateMin.toISOString().slice(0,10);
@@ -487,7 +493,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const invalidBaizeMix = datasets.some(isBaize) && !baizeOnly;
   const invalidXiaoxiangMix = datasets.some(isXiaoxiang) && !xiaoxiangOnly;
   const selectableCities = options?.cities.filter(city => !city.disabled) ?? [];
-  const invalidMerchantMix=datasets.some(isMerchant)&&!merchantOnly;
+  const invalidMerchantMix=hasAttendance&&!merchantDateValid;
   const canSubmit = taskKind === 'generate' ? datasets.length === 1 && !!selectedReport && !!generationRange && (generationAll || cities.length > 0) : datasets.every(moduleDataset) && !invalidBaizeMix && !invalidXiaoxiangMix && !invalidMerchantMix && datasets.length > 0 && (merchantOnly?(cities.length>0&&merchantDateValid):(archiveOnly || blueOnly || (xiaoxiangDated && xiaoxiangDateValid) || (cities.length > 0 && validDates)));
   const monthlyDatasets = datasets.filter(dataset => MONTHLY_DATASETS.has(dataset));
   const periodDatasets = datasets.filter(dataset => !isLanorange(dataset) && !MONTHLY_DATASETS.has(dataset) && !SNAPSHOT_DATASETS.has(dataset) && !['payment_binding', 'abnormal_followup'].includes(dataset));
@@ -508,7 +514,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   } : { task_kind: taskKind, cities: blueOnly || xiaoxiangOnly || baizeOnly ? ['全部城市'] : cities, datasets, ...(datasets.some(isLanorange) || blueOnly ? {lanorange_full_delivery:true} : {}),
     start: archiveOnly ? shanghaiToday() : xiaoxiangDated ? start : blueOnly||baizeOnly||merchantSnapshotOnly ? shanghaiToday() : start, end: archiveOnly ? shanghaiToday() : xiaoxiangDated ? end : blueOnly||baizeOnly||merchantSnapshotOnly ? shanghaiToday() : end,
     ...(refreshHistory && datasets.some(dataset => ['fraud', 'problem'].includes(dataset)) ? { refresh_history: true } : {}),
-    ...(merchantOnly?{merchant_by_city:true}:{}), ...(includeSeparation && !noCity && !merchantOnly ? { include_separation: true } : {}) };
+    ...(datasets.some(isMerchant)?{merchant_by_city:true}:{}), ...(!noCity && !merchantOnly ? { exclude_separation: excludeSeparation } : {}) };
   const currentSelectionKey = selectionKey(currentSelection);
   const matchingRun = runs.find(run => !TERMINAL_STATUSES.has(run.status) && selectionKey(run) === currentSelectionKey)
     || (!followupDatasets.length && !datasets.some(isLanorange) && !merchantOnly ? runs.find(run => selectionKey(run) === currentSelectionKey && !!run.files?.length) : undefined);
@@ -562,8 +568,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const applyBillingPeriod = (preset: BillingPeriodPreset) => {
     if (formLocked) return;
     const range = computeBillingPeriodRange(preset, shanghaiToday());
-    setStart(merchantOnly&&range.start<attendanceFirst?attendanceFirst:range.start);
-    setEnd(merchantOnly&&range.end>attendanceLast?attendanceLast:range.end);
+    setStart(hasAttendance&&range.start<attendanceFirst?attendanceFirst:range.start);
+    setEnd(hasAttendance&&range.end>attendanceLast?attendanceLast:range.end);
     setDuplicateApproval('');
   };
 
@@ -579,7 +585,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         cities:run.cities.filter(city => city !== '全部城市' && (!options || options.cities.some(item => item.name === city && !item.disabled))),
         start:!run.datasets.every(isLanorange) && DATE_PATTERN.test(run.start) ? run.start : start,
         end:!run.datasets.every(isLanorange) && DATE_PATTERN.test(run.end) ? run.end : end,
-        includeSeparation:false,
+        includeSeparation:false,excludeSeparation:true,
       };
     }
     onTaskKindChange?.(inferTaskKind(run.datasets));
@@ -588,6 +594,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
     if (!run.datasets.every(isLanorange) && DATE_PATTERN.test(run.start) && DATE_PATTERN.test(run.end)) { setStart(run.start); setEnd(run.end); }
     setRefreshHistory(false);
     setIncludeSeparation(false);
+    setExcludeSeparation(run.exclude_separation??true);
     setDuplicateApproval('');
     setRequestError('');
     setView('create');
@@ -762,7 +769,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const submitHint = taskKind === 'generate'
     ? datasets[0] === 'abnormal_riders' ? '全部城市 · 全量资料 · 生成一份整理表'
       : !cities.length ? '请选择生成范围的城市' : !validDates ? '请选择有效日期' : `${cities.length} 个城市 · 按 ${monthPreview.length} 个月份生成`
-    : merchantOnly?merchantSnapshotOnly?'所选城市商家全部邀请记录 · 全部分页 · 不筛选日期':merchantDateValid?'各城市商家全部站点 · 出勤按日期分段后合并领取':'出勤明细请选择最近90天内、早于今天的起止日期'
+    : merchantOnly?merchantSnapshotOnly?'所选城市全部邀请记录 · 按城市分别保存 · 不筛选日期':merchantDateValid?'所选城市全部站点 · 出勤按城市和日期采集后分别领取':'出勤明细请选择最近90天内、早于今天的起止日期'
     : baizeOnly ? '商翼全量员工原表 · 一份文件 · 不参与兼职自动补齐'
     : xiaoxiangOnly ? (archiveOnly ? `灯塔骑手档案 · ${datasets.length} 类资料 · 快照` : start===end ? `灯塔资料 · ${datasets.length} 类 · ${start} 单日` : `灯塔资料 · ${datasets.length} 类 · ${start} 至 ${end}，共 ${xiaoxiangSpanDays} 天`)
     : blueOnly
@@ -789,6 +796,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
     merchantDateValid,
     validDates,
     includeSeparation,
+    ...(taskKind === 'download' ? {excludeSeparation} : {}),
     subitemCount,
     submitReady,
   });
@@ -952,9 +960,11 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                               {selected && '✓'}
                             </span>
                             <span className="wb-city-chip-name">{city.name}</span>
+                            <span className="wb-city-status"><CityStationCount directory={stationDirectory.data} city={city.id}/>
                             {city.disabled && (
                               <span className="wb-city-disabled-badge">{city.note || '下架'}</span>
                             )}
+                            </span>
                           </button>
                         );
                       })}
@@ -962,6 +972,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                     {!selectableCities.length && (
                       <p className="wb-notice mt-3">暂无可下载城市，请检查风神权限或网络连接。</p>
                     )}
+                    <div className="wb-city-count-note"><small>{stationDirectory.data?.status==='loading'?'站点数正在按后台目录逐城同步':stationDirectory.data?.fetched_at?`站点数更新于 ${new Date(stationDirectory.data.fetched_at).toLocaleTimeString('zh-CN',{hour12:false})}`:'站点数尚未同步'}{stationDirectory.error||stationDirectory.data?.message?` · ${stationDirectory.error||stationDirectory.data?.message}`:''}</small><button type="button" className="wb-link" onClick={stationDirectory.refresh}>刷新站点数</button></div>
                   </fieldset>
                 )}
 
@@ -985,8 +996,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                         ['current_month_to_date', '本月至今'],
                       ] as const).map(([presetKey, label]) => {
                         const range = computeBillingPeriodRange(presetKey, shanghaiToday());
-                        const effectiveStart=merchantOnly&&range.start<attendanceFirst?attendanceFirst:range.start;
-                        const effectiveEnd=merchantOnly&&range.end>attendanceLast?attendanceLast:range.end;
+                        const effectiveStart=hasAttendance&&range.start<attendanceFirst?attendanceFirst:range.start;
+                        const effectiveEnd=hasAttendance&&range.end>attendanceLast?attendanceLast:range.end;
                         const isCurrent = start === effectiveStart && end === effectiveEnd;
                         return (
                           <button
@@ -997,7 +1008,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                             onClick={() => applyBillingPeriod(presetKey)}
                             className={`wb-period-chip ${isCurrent ? 'is-active' : ''}`}
                           >
-                            {merchantOnly&&presetKey==='current_month_to_date'?'本月至昨日':label}
+                            {hasAttendance&&presetKey==='current_month_to_date'?'本月至昨日':label}
                           </button>
                         );
                       })}
@@ -1008,8 +1019,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                       <span>开始日期</span>
                       <WorkbenchDatePicker
                         ariaLabel="下载开始日期"
-                        min={merchantOnly ? attendanceFirst : xiaoxiangOnly ? xiaoxiangFirst : undefined}
-                        max={merchantOnly ? attendanceLast : xiaoxiangOnly ? dailyDate : undefined}
+                        min={hasAttendance ? attendanceFirst : xiaoxiangOnly ? xiaoxiangFirst : undefined}
+                        max={hasAttendance ? attendanceLast : xiaoxiangOnly ? dailyDate : undefined}
                         value={start}
                         rangeRole="start"
                         rangeStart={start}
@@ -1023,8 +1034,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                       <span>结束日期</span>
                       <WorkbenchDatePicker
                         ariaLabel="下载结束日期"
-                        min={merchantOnly ? attendanceFirst : xiaoxiangOnly ? xiaoxiangFirst : undefined}
-                        max={merchantOnly ? attendanceLast : xiaoxiangOnly ? dailyDate : undefined}
+                        min={hasAttendance ? attendanceFirst : xiaoxiangOnly ? xiaoxiangFirst : undefined}
+                        max={hasAttendance ? attendanceLast : xiaoxiangOnly ? dailyDate : undefined}
                         value={end}
                         rangeRole="end"
                         rangeStart={start}
@@ -1039,18 +1050,18 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                   {!validDates && <p role="alert" className="mt-2.5 text-xs text-rose-700">开始日期不能晚于结束日期，请选择有效日期。</p>}
                   {xiaoxiangOnly && validDates && !xiaoxiangDateValid && <p role="alert" className="mt-2.5 text-xs text-rose-700">灯塔资料只能选择昨天及更早的日期，且区间最长31天。</p>}
                   {monthPreview.length > 0 && <p className="mt-2.5 text-xs leading-relaxed text-sky-700">整月资料自动下载：{monthPreview.join('、')}。</p>}
-                  {!merchantOnly && (
+                  {!merchantOnly && !xiaoxiangOnly && (
                     <div className="wb-date-rule-bar">
                       <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
                         <input
                           type="checkbox"
-                          aria-label="仅下载取分离站点"
-                          checked={includeSeparation}
+                          aria-label="排除取分离站点"
+                          checked={excludeSeparation}
                           disabled={formLocked}
-                          onChange={event => setIncludeSeparation(event.target.checked)}
+                          onChange={event => setExcludeSeparation(event.target.checked)}
                           className="accent-sky-700 h-3.5 w-3.5 rounded border-slate-300"
                         />
-                        <span>仅下载取分离站点 <span className="font-normal text-slate-400">（不勾选则排除取分离）</span></span>
+                        <span>排除取分离站点 <span className="font-normal text-slate-400">（不勾选则下载全部站点）</span></span>
                       </label>
                       {datasets.some(dataset => ['fraud', 'problem'].includes(dataset)) && (
                         <label className="flex items-center gap-1.5 cursor-pointer text-slate-500">
@@ -1081,7 +1092,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                   )}
                   {(['fengshen', 'lanorange', 'baize', 'xiaoxiang'] as const).filter(group => platform?group===platform:systemFilter === 'all' || systemFilter === group).map(group => {
                     const groupDatasets = visibleDatasets.filter(value => !isGenerator(value.id) && datasetGroup(value.id) === group);
-                    const ids = groupDatasets.filter(value => !isMerchant(value.id)).map(value => value.id);
+                    const ids = groupDatasets.map(value => value.id);
                     const allSelected = ids.length > 0 && ids.every(id => datasets.includes(id));
                     const selectedCount = datasets.filter(id => datasetGroup(id) === group).length;
                     const stepNum = noCity && noDate ? '01' : noCity || noDate ? '02' : '03';
@@ -1101,7 +1112,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                             disabled={formLocked}
                             className="wb-city-preset-btn"
                             onClick={() => {
-                              setDatasets(allSelected ? datasets.filter(id => !ids.includes(id)) : group === 'baize' || group === 'xiaoxiang' ? ids : [...new Set([...datasets.filter(id => !isBaize(id) && !isXiaoxiang(id) && !isMerchant(id)), ...ids])]);
+                              setDatasets(allSelected ? datasets.filter(id => !ids.includes(id)) : group === 'baize' || group === 'xiaoxiang' ? ids : [...new Set([...datasets.filter(id => !isBaize(id) && !isXiaoxiang(id)), ...ids])]);
+                              if(!allSelected&&ids.includes('attendance_detail')){if(end>attendanceLast)setEnd(attendanceLast);if(start>attendanceLast)setStart(attendanceLast);if(start<attendanceFirst)setStart(attendanceFirst);}
                             }}
                           >
                             {group === 'fengshen' ? (allSelected ? '清空城市资料' : '全选城市资料') : (allSelected ? '清空本组' : '全选本组')}
@@ -1122,6 +1134,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                                     if (dataset.id === 'attendance_detail') {
                                       if (end > attendanceLast) setEnd(attendanceLast);
                                       if (start > attendanceLast) setStart(attendanceLast);
+                                      if (start < attendanceFirst) setStart(attendanceFirst);
                                     }
                                   }}
                                   className="accent-sky-700 shrink-0 h-4 w-4 rounded border-slate-300 wb-dataset-checkbox"
@@ -1310,7 +1323,9 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         <dl className="wb-scope-review"><dt>本次业务</dt><dd>{scopeReview.task_kind === 'generate' ? '业务报表生成' : '资料下载'}</dd>
         <dt>资料或报表</dt><dd>{scopeReview.datasets.map(datasetLabel).join('、')}</dd>
         <dt>城市范围</dt><dd>{scopeReview.datasets.length===1&&isRiderArchive(scopeReview.datasets[0]) ? '账号全部站点 · 当前快照' : scopeReview.datasets.every(isXiaoxiang) ? '账号可访问全部城市 · 日期区间导出' : scopeReview.datasets.every(isGlobalDataset) ? '全部城市 · 按现有全量规则' : scopeReview.cities.join('、')}</dd>
+        {scopeReview.exclude_separation !== undefined && <><dt>站点范围</dt><dd>{scopeReview.exclude_separation ? '排除取分离站点' : '全部站点（含取分离）'}</dd></>}
         <dt>日期范围</dt><dd>{scopeReview.datasets.length===1&&isRiderArchive(scopeReview.datasets[0])?'当前快照，不按日期筛选':scopeReview.datasets.every(isMerchantSnapshot)?'邀请记录全量，不按日期筛选':scopeReview.datasets.every(isGlobalDataset) ? '全量交付，不按所选日期筛选' : `${scopeReview.start} 至 ${scopeReview.end}`}</dd></dl>
+        {scopeReview.datasets.includes('invitation_records')&&<p className="wb-muted">邀请记录按所选城市获取全量快照，不按日期筛选；出勤按城市全部可见站点获取。其他资料沿用各自规则。</p>}
         <p className="wb-notice">这是新建任务。继续已有任务请返回任务中心；页面关闭或返回修改不会提交导出。</p>
         {scopeReview.task_kind === 'generate' && <p className="wb-muted">系统按既有规则关联来源资料；关键资料不完整时保留任务并提示处理，不代表所有来源均可自动复用。</p>}
         <div className="wb-row"><button type="button" className="wb-button" onClick={() => setScopeReview(null)}>返回修改范围</button><button type="button" className="wb-primary" disabled={creating} onClick={() => {

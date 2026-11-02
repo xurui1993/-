@@ -20,6 +20,7 @@ LOCK = threading.RLock()
 ENDED = {'success', 'partial', 'error', 'cancelled', 'interrupted'}
 ACTIVE = {'queued', 'running', 'waiting_login', 'waiting_manual', 'cancelling', 'preparing', 'stopping'}
 ATTENTION = {'waiting_login', 'waiting_manual', 'waiting_materials', 'pending_download', 'ready', 'partial', 'error', 'interrupted', 'needs_review'}
+ATTENTION.add('awaiting_confirmation')
 
 
 @contextmanager
@@ -32,6 +33,9 @@ def database():
             db.execute("CREATE TABLE IF NOT EXISTS hidden (id TEXT PRIMARY KEY, created TEXT NOT NULL, signature TEXT NOT NULL DEFAULT '')")
             if 'signature' not in {row[1] for row in db.execute('PRAGMA table_info(hidden)')}:
                 db.execute("ALTER TABLE hidden ADD COLUMN signature TEXT NOT NULL DEFAULT ''")
+            db.execute('CREATE TABLE IF NOT EXISTS pending_hide (id TEXT PRIMARY KEY, created TEXT NOT NULL)')
+            if 'members' not in {row[1] for row in db.execute('PRAGMA table_info(pending_hide)')}:
+                db.execute("ALTER TABLE pending_hide ADD COLUMN members TEXT NOT NULL DEFAULT ''")
             yield db
     finally:
         db.close()
@@ -104,7 +108,7 @@ def created_day(record):
 def select_records(records, hidden, filters):
     # An archived task that resumes must be visible again, including its retry chain.
     for record in records:
-        record['hidden'] = record['id'] in hidden and record['status'] in ENDED
+        record['hidden'] = record['id'] in hidden and record['status'] not in ACTIVE
     archived = filters.get('archived') == '1'
     base = [r for r in records if r['hidden'] == archived]
     def matches(r, ignore_status=False):
@@ -140,11 +144,18 @@ def signature(record):
 def hidden_ids(records=None):
     with database() as db:
         if records is not None:
+            pending = {row[0]: row[1:] for row in db.execute('SELECT id,created,members FROM pending_hide')}
+            for record in records:
+                if record['id'] in pending and record['status'] not in ACTIVE:
+                    created, members = pending[record['id']]
+                    if not members or members == json.dumps(sorted(record.get('member_ids', []))):
+                        db.execute('INSERT OR REPLACE INTO hidden (id,created,signature) VALUES (?,?,?)', (record['id'], created, signature(record)))
+                    db.execute('DELETE FROM pending_hide WHERE id=?', (record['id'],))
             hidden = dict(db.execute('SELECT id, signature FROM hidden'))
             # A new attempt or changed outcome is new work and must not vanish
             # just because an earlier version of the task was put away.
             changed = [(r['id'],) for r in records if r['id'] in hidden and
-                       (r['status'] not in ENDED or hidden[r['id']] and hidden[r['id']] != signature(r))]
+                       (r['status'] in ACTIVE or hidden[r['id']] and hidden[r['id']] != signature(r))]
             db.executemany('DELETE FROM hidden WHERE id=?', changed)
         return {row[0] for row in db.execute('SELECT id FROM hidden')}
 
@@ -190,14 +201,59 @@ def visibility(payload: dict, request: Request):
         by_id = {r['id']: r for r in records}
         if any(key not in by_id for key in ids):
             raise HTTPException(404, '部分任务已变化，请刷新列表后重试')
-        if not restore and any(by_id[key]['status'] not in ENDED for key in ids):
-            raise HTTPException(409, '仅已结束任务可移出，进行中、待验证和待核实任务保留在列表')
+        active = [by_id[key] for key in ids if by_id[key]['status'] in ACTIVE]
+        if not restore and active and payload.get('stop_first') is not True:
+            raise HTTPException(409, '进行中任务需确认停止后移出')
+        if not restore:
+            for record in active:
+                stop_record(record, request)
         with database() as db:
             if restore:
                 db.executemany('DELETE FROM hidden WHERE id=?', [(key,) for key in set(ids)])
+                db.executemany('DELETE FROM pending_hide WHERE id=?', [(key,) for key in set(ids)])
             else:
-                db.executemany('INSERT OR REPLACE INTO hidden (id,created,signature) VALUES (?, ?, ?)', [(key, dt.datetime.now(dt.timezone.utc).isoformat(), signature(by_id[key])) for key in set(ids)])
+                now = dt.datetime.now(dt.timezone.utc).isoformat()
+                db.executemany('INSERT OR REPLACE INTO hidden (id,created,signature) VALUES (?, ?, ?)', [(key, now, signature(by_id[key])) for key in set(ids) if by_id[key]['status'] not in ACTIVE])
+                db.executemany('INSERT OR REPLACE INTO pending_hide (id,created,members) VALUES (?,?,?)', [(r['id'], now, json.dumps(sorted(r.get('member_ids', [])))) for r in active])
     return {'changed': len(set(ids))}
+
+
+def stop_record(record, request):
+    if record['kind'] == 'payroll':
+        from payroll_inputs import workspace, account
+        from payroll_control import stop
+        return stop(workspace(request), record['batch_id'], account(request))
+    if record['kind'] == 'approval':
+        from lanorange_approvals import stop
+        return stop(record['price_id'], {'confirm': True}, request)
+    if record['kind'] == 'price-export':
+        from lanorange_price_export import stop
+        return stop(record['price_id'], {}, request)
+    from download_jobs import get_manager, ACTIVE_STATUSES
+    manager = get_manager()
+    user = require_account(request)
+    results = []
+    for key in record.get('member_ids', []) or [record['action_run_id'] or record['id']]:
+        owner = manager.run_owner(key) if user['role'] == 'admin' else user['owner']
+        if manager.get_run(owner, key)['status'] in ACTIVE_STATUSES:
+            results.append(manager.cancel(owner, key))
+    return results
+
+
+@router.post('/stop')
+def stop_task(payload: dict, request: Request):
+    validate_write_request(request)
+    require_account(request)
+    if set(payload) != {'id'} or not isinstance(payload['id'], str):
+        raise HTTPException(400, '任务编号无效')
+    with LOCK:
+        records, _ = collect(request)
+        record = next((r for r in records if r['id'] == payload['id']), None)
+        if record is None:
+            raise HTTPException(404, '任务不存在或不可访问')
+        if record['status'] not in ENDED:
+            stop_record(record, request)
+    return {'requested': True}
 
 
 def directory(request, record_id=None):

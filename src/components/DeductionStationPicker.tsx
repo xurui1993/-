@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {RefreshCw,Search} from 'lucide-react';
 import {WorkbenchDrawer} from './WorkbenchDrawer';
+import {useStationDirectory,stationCountText} from '../lib/useStationDirectory';
 import {filterStations,requestStationCatalog,stationCityOptions,stationCitySelection,stationIdentity,type DeductionStation,type StationCatalog,type StationFetch,type StationPlatform} from '../lib/deductionStations';
 
 export function DeductionStationPicker({apiFetch,platform:initialPlatform='fengshen',current,disabled=false,onSelect,onManual,onClose,onPlatformChange}:{
@@ -8,6 +9,7 @@ export function DeductionStationPicker({apiFetch,platform:initialPlatform='fengs
   onSelect:(station:DeductionStation)=>void;onManual:()=>void;onClose:()=>void;onPlatformChange?:(platform:StationPlatform)=>void;
 }){
   const [platform,setPlatform]=useState<StationPlatform>(initialPlatform),[city,setCity]=useState('');
+  const stationDirectory=useStationDirectory(platform,apiFetch);
   const [catalog,setCatalog]=useState<StationCatalog|null>(null),[cityOptions,setCityOptions]=useState<{id:string;name:string}[]>([]);
   const [search,setSearch]=useState(''),[loading,setLoading]=useState(false),[error,setError]=useState('');
   const controller=useRef<AbortController|null>(null),sequence=useRef(0),alive=useRef(true);
@@ -48,7 +50,7 @@ export function DeductionStationPicker({apiFetch,platform:initialPlatform='fengs
       {current&&<div className="wb-station-picker-current"><strong>当前配置：{current.city||'未填城市'} · {current.name||'未填站点'}</strong><p className="wb-muted">编号 {current.id||'未填'}。选择候选站点后才修改草稿；目录中未出现不代表历史配置已失效。</p></div>}
       <div className="wb-station-picker-controls">
         <label><span>来源平台</span><select className="wb-select" aria-label="站点来源平台" value={platform} disabled={disabled} onChange={event=>{cancel();const next=event.target.value as StationPlatform;setPlatform(next);onPlatformChange?.(next);setCity('');setCityOptions([]);setCatalog(null);setSearch('');setError('');}}><option value="fengshen">风神</option><option value="xiaoxiang">灯塔</option></select></label>
-        <label><span>城市</span><select className="wb-select" aria-label="后台站点城市" value={city} disabled={disabled||!cityOptions.length} onChange={event=>{cancel();setCity(event.target.value);setCatalog(null);setSearch('');setError('');}}><option value="">{platform==='fengshen'?'先获取后台城市':'全部可查询城市'}</option>{choices.map(option=><option key={JSON.stringify([option.value,option.name])} value={option.value}>{option.label}</option>)}</select></label>
+        <label><span>城市</span><select className="wb-select" aria-label="后台站点城市" value={city} disabled={disabled||!cityOptions.length} onChange={event=>{cancel();setCity(event.target.value);setCatalog(null);setSearch('');setError('');}}><option value="">{platform==='fengshen'?'先获取后台城市':'全部可查询城市'}</option>{choices.map(option=><option key={JSON.stringify([option.value,option.name])} value={option.value}>{option.label} · {stationCountText(stationDirectory.data,option.value)}</option>)}</select></label>
         <button type="button" className="wb-primary" disabled={disabled||loading} onClick={()=>void load()}>{loading?'正在获取…':platform==='fengshen'&&!city?'获取城市列表':'获取站点'}</button>
         <button type="button" className="wb-button" disabled={disabled||loading||!catalog} onClick={()=>void load(true)}><RefreshCw size={14}/>刷新目录</button>
         <button type="button" className="wb-button" onClick={()=>window.dispatchEvent(new CustomEvent('workbench:connections',{detail:{source:platform}}))}>平台登录</button>

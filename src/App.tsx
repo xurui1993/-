@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
-import JSZip from "jszip";
+import {createUploadArchive} from './lib/uploadArchive';
 import { uploadSource } from "./lib/uploadSource";
+import {pendingQueueSubmission,prepareQueueSubmission,sendQueueSubmission,queueUploadFiles} from './lib/payrollQueueSubmit';
 import { THEMES } from "./constants";
 import { LogEntry, AppConfig, TaskHistoryRecord } from "./types";
 import { FengshenLoginModal, FengshenAuthStatus } from "./components/FengshenLoginModal";
@@ -18,7 +19,8 @@ import { SystemConnections } from "./components/SystemConnections";
 import { HeaderDownloadCenter } from "./components/HeaderDownloadCenter";
 import { LanorangeApprovals } from "./components/LanorangeApprovals";
 import { LanorangePriceExports } from "./components/LanorangePriceExports";
-import { DeductionSettings } from "./components/DeductionSettings";
+import { StationDeductionManager } from "./components/StationDeductionManager";
+import {useStationDirectory,stationCountText} from './lib/useStationDirectory';
 import { SystemTemplatesPanel } from "./components/SystemTemplatesPanel";
 import { initialTaskKind, TASK_KIND_LABELS, type TaskKind } from "./lib/taskCatalog";
 import { getHeaderModuleContext, getPayrollSidebarBadge } from "./lib/workbench";
@@ -195,6 +197,7 @@ export default function App() {
   }, [workspaceId]);
 
   const [runningTask, setRunningTask] = useState<string | null>(null);
+  const executionSequence = useRef(0);
   const [isRiderSourceUploading, setIsRiderSourceUploading] = useState(false);
   const [lastRiderSourcesOutput, setLastRiderSourcesOutput] = useState<string | null>(null);
   const [lastShangyiOutput, setLastShangyiOutput] = useState<string | null>(null);
@@ -203,7 +206,7 @@ export default function App() {
   });
   const [lastRunResult, setLastRunResult] = useState<RunResult | null>(null);
   useEffect(() => {
-    if (!payrollPreparation || runningTask || !['preparing', 'calculating'].includes(payrollPreparation.status)) return;
+    if (!payrollPreparation || runningTask || !['preparing', 'calculating', 'stopping'].includes(payrollPreparation.status)) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const controller = new AbortController();
@@ -214,7 +217,7 @@ export default function App() {
           const value = await response.json();
           setPayrollPreparation(value);
           if (value.result?.output) { setLastOutputFolder(value.result.output); localStorage.setItem('lastOutputFolder', value.result.output); }
-          if (!['preparing', 'calculating'].includes(value.status)) return;
+          if (!['preparing', 'calculating', 'stopping'].includes(value.status)) return;
         }
       } catch { /* Preserve the last known state while the network reconnects. */ }
       if (!stopped) timer = setTimeout(poll, 3000);
@@ -368,6 +371,7 @@ export default function App() {
     const defaultState: AppConfig = {
       city: "",
       payrollSourceMode: "fengshen",
+      payrollExcludeSeparation: true,
       sourcePath: "./uploads",
       basePath: "",
       cities: [],
@@ -391,6 +395,7 @@ export default function App() {
   });
 
   const [directoryCities,setDirectoryCities]=useState<string[]>([]);
+  const appStationDirectory=useStationDirectory(appConfig.payrollSourceMode==='xiaoxiang'?'xiaoxiang':'fengshen',fetchWithAuth);
   const [directoryMessage,setDirectoryMessage]=useState('');
   useEffect(() => {
     const controller=new AbortController();
@@ -548,21 +553,14 @@ export default function App() {
           level: "INFO",
         },
       ]);
-      const zip = new JSZip();
-      for (let i = 0; i < fileList.length; i++) {
-        zip.file(fileList[i].relativePath, fileList[i].file);
-      }
       setLogs((prev: any[]) => [
         ...prev,
         { text: `>>> 📦 打包中，请稍候...`, level: "INFO" },
       ]);
-      const blob = await zip.generateAsync({ 
-        type: "blob", 
-        compression: "STORE" 
-      });
+      const blob = await createUploadArchive(fileList, percent => setUploadStatus((prev: any) => prev ? {...prev, stage: 'zipping', percent} : null));
 
       const sizeStr = `${(blob.size / 1024 / 1024).toFixed(2)} MB`;
-      setUploadStatus((prev: any) => prev ? { ...prev, stage: 'uploading', size: sizeStr } : null);
+      setUploadStatus((prev: any) => prev ? { ...prev, stage: 'uploading', size: sizeStr, percent: 0 } : null);
       setLogs((prev: any[]) => [
         ...prev,
         {
@@ -626,13 +624,21 @@ export default function App() {
   };
 
   const uploadFilesAndExecute = async (files: { file: File; relativePath: string }[]) => {
-    if (!files.length || isRunning || uploadSubmission.current) return;
+    if (!files.length || uploadSubmission.current) return;
     uploadSubmission.current = true;
     const mode = files.some(({ file }) => (file.name.includes('小象') || file.name.includes('灯塔')) && file.name.toLowerCase().includes('template')) ? 'xiaoxiang' : appConfig.payrollSourceMode;
     try {
       if (!files.some(({file}) => !file.name.startsWith('~$') && file.name.toLowerCase().includes('template') && /\.xlsx$/i.test(file.name))) throw new Error('请上传 .xlsx 薪资申请表（标准模板）');
-      const uploaded = await uploadExtractedFilesAndGetPath(files);
+      const uploaded = await uploadExtractedFilesAndGetPath(queueUploadFiles(files,mode||'fengshen'));
       if (!uploaded) return;
+      if(mode!=='xiaoxiang') {
+        const attempt=prepareQueueSubmission(workspaceId,{source_path:uploaded.path,mode:mode||'fengshen',config:{...appConfig}},sessionStorage);
+        const submitted=await sendQueueSubmission(workspaceId,attempt,fetchWithAuth,sessionStorage);
+        setUploadStatus(null);
+        appendLog(`已加入 ${submitted.tasks.length} 个核算任务，按顺序执行。`,'INFO','core');
+        window.dispatchEvent(new CustomEvent('payroll-queue:changed'));
+        return;
+      }
       setUploadStatus((previous: any) => previous ? { ...previous, stage: 'validating' } : null);
       const response = await fetchWithAuth('/api/parttime/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: uploaded.path, mode }), signal: AbortSignal.timeout(30000) });
       const data = await response.json();
@@ -646,10 +652,21 @@ export default function App() {
       localStorage.removeItem(`payroll_preparation_${workspaceId}`);
       setAppConfig(previous => ({...previous, sourcePath: uploaded.path, city: data.plan.city, payrollSourceMode: detectedMode}));
       appendLog(`已识别申请范围：${data.plan.city} · ${data.plan.start} 至 ${data.plan.end} · ${data.plan.applicants} 人，开始自动处理`, 'INFO', 'core');
-      await handleRun({action:'core', sourcePath:uploaded.path, city:data.plan.city, payrollSourceMode:detectedMode, payrollPreparationId:'', preparationOnly:false, deductionConfigVersion:''});
-    } catch (error) { setUploadStatus(null); showToast(error instanceof Error ? error.message : '模板预检失败', 'error'); }
+      await handleRun({action:'core', sourcePath:uploaded.path, city:data.plan.city, payrollSourceMode:detectedMode, payrollPreparationId:'', preparationOnly:detectedMode!=='fengshen', deductionConfigVersion:''});
+    } catch (error) { setUploadStatus(null); const message=error instanceof Error ? error.message : '模板无法读取'; if(mode==='fengshen'){appendLog(message,'ERROR','core');showToast('任务已结束，详情见执行日志','info');}else showToast(message,'error'); }
     finally { uploadSubmission.current = false; }
   };
+
+  const recoveredQueueSubmission=useRef('');
+  useEffect(()=>{
+    const attempt=pendingQueueSubmission(workspaceId,sessionStorage);
+    if(!attempt||recoveredQueueSubmission.current===attempt.request_id)return;
+    recoveredQueueSubmission.current=attempt.request_id;
+    void sendQueueSubmission(workspaceId,attempt,fetchWithAuth,sessionStorage).then(()=>{
+      window.dispatchEvent(new CustomEvent('payroll-queue:changed'));
+      showToast('原提交已确认，核算队列已恢复。','info');
+    }).catch(error=>showToast(error instanceof Error?error.message:'任务提交结果尚未确认','warn'));
+  },[workspaceId]);
 
   const downloadRiderSources = async (file: File) => {
     if (isRunning || isRiderSourceUploading) return;
@@ -678,6 +695,7 @@ export default function App() {
 
   const handleRun = async (overrides?: Partial<AppConfig>) => {
     if (isRunning || (isRiderSourceUploading && overrides?.action !== 'download_rider_sources')) return;
+    const executionId = ++executionSequence.current;
     
     seenProgressTexts.current.clear();
     seenLogs.current.clear();
@@ -977,6 +995,10 @@ export default function App() {
         resultMsg: String(err),
         finishedAt: Date.now(),
       });
+    } finally {
+      // A disconnected event stream does not stop the durable server task.
+      // Release the browser busy state so manifest polling can reconnect.
+      if (executionSequence.current === executionId) setRunningTask(null);
     }
   };
 
@@ -1232,7 +1254,7 @@ export default function App() {
                         <option value="">-- 请选择城市 --</option>
                         {directoryCities.map((city) => (
                           <option key={city} value={city}>
-                            {city}
+                            {city} · {stationCountText(appStationDirectory.data,city)}
                           </option>
                         ))}
                       </select>
@@ -1334,7 +1356,7 @@ export default function App() {
       {settingsOpen && <WorkbenchDrawer title="工作台设置" onClose={() => setSettingsOpen(false)}>
         <section className="wb-setting-row"><div><h3>扣款配置</h3><p className="wb-muted">维护默认配置；核算开始时自动保存实际采用的规则。</p></div><button className="wb-button" onClick={() => { setSettingsOpen(false); setDeductionDefaultOnly(true); setDeductionOpen(true); }}>扣款设置</button></section>
       </WorkbenchDrawer>}
-      {deductionOpen && <DeductionSettings platform={(!deductionDefaultOnly && payrollPreparation ? payrollPreparation.mode : appConfig.payrollSourceMode)==='xiaoxiang'?'xiaoxiang':'fengshen'} batchId={deductionDefaultOnly ? undefined : payrollPreparation?.id} apiFetch={fetchWithAuth} onClose={() => { setDeductionOpen(false); setDeductionVersion(value => value + 1); }} onSaved={() => setDeductionVersion(value => value + 1)} />}
+      {deductionOpen && <StationDeductionManager platform={(!deductionDefaultOnly && payrollPreparation ? payrollPreparation.mode : appConfig.payrollSourceMode)==='xiaoxiang'?'xiaoxiang':'fengshen'} apiFetch={fetchWithAuth} onClose={() => { setDeductionOpen(false); setDeductionVersion(value => value + 1); }} onSaved={() => setDeductionVersion(value => value + 1)} />}
 
 
       <UploadProgressOverlay status={uploadStatus} appTheme={appTheme} />

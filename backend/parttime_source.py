@@ -36,10 +36,10 @@ TEXT_COLUMNS = ID_COLUMNS | {
     "其他减项原因（如填写了其他减项，则此项必填）",
 }
 COLLECTION_LOCK = threading.Lock()
-MAX_FILE_BYTES = 200 * 1024 * 1024
+MAX_FILE_BYTES = 4 * 1024 ** 3
 # 日账单按块解压和逐行校验，单文件上限独立于上传和内存读取限制。
-MAX_DAILY_FILE_BYTES = 512 * 1024 * 1024
-MAX_DAILY_ARCHIVE_BYTES = 1024 * 1024 * 1024
+MAX_DAILY_FILE_BYTES = 4 * 1024 ** 3
+MAX_DAILY_ARCHIVE_BYTES = 10 * 1024 ** 3
 
 
 class SourceError(BillCollectionError):
@@ -375,7 +375,7 @@ def unpack_daily(path, target, expected_kinds=None):
         with zipfile.ZipFile(path) as archive:
             entries = archive.infolist()
             if len(entries) > 1000 or sum(e.file_size for e in entries) > MAX_DAILY_ARCHIVE_BYTES:
-                raise SourceError("代理商账单压缩包解压总量超过 1GB 限制")
+                raise SourceError("代理商账单压缩包解压总量超过 10GiB 限制")
             selected = {}
             # 完整检查目录再开始写入，重复项或非法成员不会留下半份账单。
             for entry in entries:
@@ -394,7 +394,7 @@ def unpack_daily(path, target, expected_kinds=None):
                 if kind in selected:
                     raise SourceError(kind + "存在多份同类子账单，需核对导出范围")
                 if entry.file_size > MAX_DAILY_FILE_BYTES:
-                    raise SourceError(kind + "文件超过 512MB 流式处理限制")
+                    raise SourceError(kind + "文件超过 4GiB 流式处理限制")
                 selected[kind] = entry
             if set(selected) != expected_kinds:
                 raise SourceError("代理商导出缺少所选配送费或违规扣款文件；未获取不等于无记录")

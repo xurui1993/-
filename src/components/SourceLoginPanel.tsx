@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {platformAuthRequest,PlatformAuthError} from '../lib/platformAuthApi';
 import {OfficialVerification} from './OfficialVerification';
+import {reconcileAuthDraft,type AuthDraftScope} from '../lib/authInputDraft';
 
 type Field={id:string;type:string;label:string;role?:string;filled:boolean};
 type Control={issuer?:string;id:string;label:string;kind:string;enabled?:boolean;retry_after?:number};
@@ -19,6 +20,8 @@ export function SourceLoginPanel({source,sessionId,apiFetch,desktop={}}:{source:
   const [qrRetry,setQrRetry]=useState(0);
   const deadline=useRef(0),inflight=useRef(false),issuer=useRef<string|undefined>(undefined);
   const fields=desktop.fields || [],controls=desktop.controls || [];
+  const previousDraft=useRef<AuthDraftScope|undefined>(undefined);
+  const fieldShape=JSON.stringify(desktop.fields?.map(({id,type,role})=>({id,type,role})));
   const sms=controls.find(c=>c.kind==='sms'),submit=controls.find(c=>c.kind==='submit');
   const captcha=desktop.math_captcha;
   const consentField=fields.find(f=>f.role==='consent'),voiceField=fields.find(f=>f.role==='voice_code');
@@ -27,8 +30,15 @@ export function SourceLoginPanel({source,sessionId,apiFetch,desktop={}}:{source:
   const qrMode=source==='lanorange' || boardQr || lighthouseQr;
   const qrKey=qrMode && desktop.has_qr && desktop.qr_version?sessionId+':'+desktop.qr_version:'';
   const refresh=controls.find(c=>c.kind==='qr_refresh');
-  useEffect(()=>{setValues({});setError('');setUncertain(false);setLastCommand(0);setLastSms(0);},[sessionId]);
-  useEffect(()=>{setValues(previous=>Object.fromEntries(fields.filter(f=>!['password','sms_code','voice_code','math'].includes(f.role || '') && f.type!=='password' && previous[f.id]!==undefined).map(f=>[f.id,previous[f.id]])));},[desktop.form_id]);
+  useEffect(()=>{setValues({});setError('');setUncertain(false);setLastCommand(0);setLastSms(0);},[source,sessionId]);
+  useEffect(()=>{
+    // form_id authorizes commands, but captcha/control revisions are not a new password field.
+    // A poll without field metadata must not erase the user's unfinished draft.
+    if(desktop.fields===undefined)return;
+    const next:AuthDraftScope={source,sessionId,fields:desktop.fields,captchaId:desktop.math_captcha?.id};
+    const previous=previousDraft.current;
+    setValues(values=>reconcileAuthDraft(values,previous,next));previousDraft.current=next;
+  },[source,sessionId,fieldShape,desktop.math_captcha?.id]);
   useEffect(()=>{if(issuer.current!==sms?.issuer){deadline.current=0;issuer.current=sms?.issuer;}deadline.current=Math.max(deadline.current,Date.now()+1000*Math.max(desktop.sms_retry_after || 0,sms?.retry_after || 0));},[desktop.sms_retry_after,sms?.retry_after,sms?.issuer]);
   useEffect(()=>{const tick=()=>setSeconds(Math.max(0,Math.ceil((deadline.current-Date.now())/1000)));tick();const timer=setInterval(tick,500);return()=>clearInterval(timer);},[]);
   const endpoint=`/api/fengshen-downloads/source-auth/${source}`;

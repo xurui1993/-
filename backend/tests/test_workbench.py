@@ -94,17 +94,18 @@ class ReuseTests(unittest.TestCase):
 class PreparationGateTests(unittest.TestCase):
     setUp = fixtures.PayrollInputTests.setUp
     delivery = fixtures.PayrollInputTests.delivery
-    def test_automatic_batch_waits_for_reuse_or_download_selection(self):
+    def test_automatic_batch_starts_download_without_confirmation(self):
         config = SimpleNamespace(sourcePath=str(self.source), payrollSourceMode='fengshen', payrollPreparationId='', preparationOnly=True)
-        with patch.object(inputs, 'workspace', return_value='tester'), patch.object(inputs, 'account', return_value='download_shared'), patch('download_jobs.get_manager') as manager:
+        with patch.object(inputs, 'workspace', return_value='tester'), patch.object(inputs, 'account', return_value='download_shared'), patch('download_jobs.get_manager') as manager, patch('payroll_automatic.prepare_scope'), patch.object(inputs,'start_download_resumable',side_effect=inputs.SourceError('合成下载暂停')) as start:
             async def collect():
                 return [event async for event in inputs.run_payroll(config, None)]
             events = asyncio.run(collect())
-        manager.assert_not_called()
+        manager.assert_called_once();start.assert_called_once()
         decoded = [json.loads(event[6:]) for event in events if event.startswith('data: ')]
-        preparation = next(event['preparation'] for event in decoded if event['type'] == 'payroll_preparation')
-        self.assertEqual(preparation['status'], 'pending_download')
-        self.assertEqual(preparation['jobs'], [])
+        preparations = [event['preparation'] for event in decoded if event['type'] == 'payroll_preparation']
+        self.assertTrue(preparations)
+        self.assertTrue(all(p['status'] != 'awaiting_confirmation' for p in preparations))
+        self.assertEqual(preparations[-1]['status'], 'error')
 
     def test_preparation_only_never_calls_calculation(self):
         self.delivery()
@@ -127,7 +128,7 @@ class PreparationGateTests(unittest.TestCase):
         with patch.object(inputs, 'workspace', return_value='tester'), patch('workbench.deduction_snapshot', return_value={'version': 'new-version', 'rows': []}), patch('tasks.run_main_calculation_gen') as calculate:
             async def collect():
                 return [event async for event in inputs.run_payroll(config, None)]
-            with self.assertRaisesRegex(inputs.SourceError, '配置已变化'):
+            with self.assertRaisesRegex(inputs.SourceError, '请先确认'):
                 asyncio.run(collect())
         calculate.assert_not_called()
         manifest = next((self.root / 'uploads/tester').glob('payroll_*/manifest.json'))

@@ -769,7 +769,7 @@ async def run_summary_parttime_gen(folder, city):
         yield create_log_event(f"合并报表时出现意外: {e}", "ERROR")
         yield create_finish_event("error", str(e))
 
-async def run_main_calculation_gen(city, selected_option, source_folder, base_path, theme, enable_interceptor=False, enable_cross_station_merge=False, deductionRules=None, taskQueue=None, strict_inputs=False, manual_template_only=False, force_no_price=False, skip_binding_check=False, input_snapshot=None, prepared_plan=None, verified_inputs=None, output_root=None):
+async def run_main_calculation_gen(city, selected_option, source_folder, base_path, theme, enable_interceptor=False, enable_cross_station_merge=False, deductionRules=None, taskQueue=None, strict_inputs=False, manual_template_only=False, force_no_price=False, skip_binding_check=False, input_snapshot=None, prepared_plan=None, verified_inputs=None, output_root=None, cancelled=None):
     # 处理逻辑：作为核心异步任务入口，负责启动具体的业务流程计算
     import sys
     import os
@@ -785,16 +785,21 @@ async def run_main_calculation_gen(city, selected_option, source_folder, base_pa
 
     queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
+    from payroll_control import checkpoint, PayrollStopped
     
     def log_cb(msg, level="INFO"):
+        checkpoint(cancelled)
         # 处理逻辑：日志输出及前端进度条回调事件生成
         loop.call_soon_threadsafe(queue.put_nowait, create_log_event(msg, level))
         
     def progress_cb(value, text):
+        checkpoint(cancelled)
         # 处理逻辑：日志输出及前端进度条回调事件生成
         loop.call_soon_threadsafe(queue.put_nowait, create_progress_event(value, text))
         
     def finish_cb(status, result_msg, stats_info=None):
+        if status != 'cancelled':
+            checkpoint(cancelled)
         # 处理逻辑：日志输出及前端进度条回调事件生成
         from payroll_performance import current_session
         session = current_session()
@@ -817,10 +822,13 @@ async def run_main_calculation_gen(city, selected_option, source_folder, base_pa
         global_resume_events[uid] = {'event': event, 'result': False}
         prompt_event_str = f"data: {json.dumps({'type': 'prompt', 'uuid': uid, 'title': title, 'message': message})}\n\n"
         loop.call_soon_threadsafe(queue.put_nowait, prompt_event_str)
-        event.wait() # blocks the worker thread until frontend replies
-        res = global_resume_events[uid]['result']
-        del global_resume_events[uid]
-        return res
+        try:
+            while not event.wait(0.25):
+                checkpoint(cancelled)
+            checkpoint(cancelled)
+            return global_resume_events[uid]['result']
+        finally:
+            global_resume_events.pop(uid, None)
         
     def worker():
         # 处理逻辑：worker 的主要执行逻辑
@@ -945,6 +953,7 @@ async def run_main_calculation_gen(city, selected_option, source_folder, base_pa
                             force_no_price=force_no_price,
                             skip_binding_check=skip_binding_check,
                             input_snapshot=input_snapshot,
+                            relaxed_optional_inputs=bool(input_snapshot and input_snapshot.get('input_policy')=='readable_delivery_v1'),
                             **({'output_root': output_root} if output_root else {}),
                         )
                     except KeyError as e:
@@ -981,7 +990,7 @@ async def run_main_calculation_gen(city, selected_option, source_folder, base_pa
             log_cb(f">>> ⏳ 程序异常终止，共计耗时: {elapsed:.2f} 秒", "ERROR")
             finish_cb("error", str(e))
 
-    yield create_log_event(">>> ⚙️ 你这孩子，一天到晚瞎想啥呢？能在大王手底下干活，那是咱们老猪家祖祖辈辈修来的福气！新一轮工作开始了...", "INFO")
+    yield create_log_event('正在开始薪资核算…', 'INFO')
     
     def measured_worker():
         from pathlib import Path
@@ -990,17 +999,29 @@ async def run_main_calculation_gen(city, selected_option, source_folder, base_pa
         def stage(label):
             loop.call_soon_threadsafe(queue.put_nowait, 'data: ' + json.dumps({'type': 'payroll_stage', 'text': label}, ensure_ascii=False) + '\n\n')
         try:
+            checkpoint(cancelled)
             with calculation_context(directory, (input_snapshot or {}).get('id', ''), stage, verified_inputs):
                 worker()
+        except PayrollStopped:
+            finish_cb('cancelled', '任务已停止，原始资料及已生成文件保留')
         except Exception as exc:
             finish_cb('error', str(exc))
     thread = threading.Thread(target=measured_worker, daemon=True)
     thread.start()
     
+    pending_finish = None
     while True:
         event = await queue.get()
         if event is None:
             await asyncio.to_thread(thread.join)
             break
+        if cancelled is not None and cancelled.is_set():
+            continue
+        if event.startswith('data: ') and json.loads(event[6:]).get('type') == 'finish':
+            pending_finish = event
+            continue
         yield event
+    checkpoint(cancelled)
+    if pending_finish:
+        yield pending_finish
 

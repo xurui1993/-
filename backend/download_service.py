@@ -156,7 +156,7 @@ def validate_request(payload, today=None):
         raise ValidationError("历史数据刷新选项必须为布尔值")
     selected_cities, selected = payload.get("cities"), payload.get("datasets")
     if 'merchant_by_city' in payload and type(payload['merchant_by_city']) is not bool:raise ValidationError('城市商家选项必须为布尔值')
-    if isinstance(selected,list) and any(kind in MERCHANT_DATASETS for kind in selected if isinstance(kind,str)):
+    if isinstance(selected,list) and selected and all(isinstance(kind,str) and kind in MERCHANT_DATASETS for kind in selected):
         if not selected or any(not isinstance(kind,str) or kind not in MERCHANT_DATASETS for kind in selected) or task_intent.get('task_kind','download')!='download':raise ValidationError('商家资料请单独下载，可同时选择邀请记录和出勤明细')
         legacy=selected_cities in (None,[],[MERCHANT]) and not payload.get('merchant_by_city')
         if not legacy:
@@ -242,6 +242,8 @@ def validate_request(payload, today=None):
     if first > last:
         raise ValidationError("开始日期不能晚于结束日期")
     today = today or dt.datetime.now(SHANGHAI).date()
+    if ATTENDANCE in selected and (first < today-dt.timedelta(days=90) or last >= today):
+        raise ValidationError('出勤明细须选择最近90天内、早于今天的有效起止日期')
     if any(kind not in MONTHLY_DATASETS | SNAPSHOT_DATASETS for kind in selected) and last > today:
         raise ValidationError("周期资料不能选择未来日期")
     if MONTHLY_DATASETS.intersection(selected) and (last.year, last.month) > (today.year, today.month):
@@ -251,14 +253,16 @@ def validate_request(payload, today=None):
             date_batches(first.isoformat(), last.isoformat(), today=today)
         except BillCollectionError as exc:
             raise ValidationError(str(exc).replace("核算已停止", "下载未启动")) from None
-    if "include_separation" in payload and type(payload["include_separation"]) is not bool:
+    if any(key in payload and type(payload[key]) is not bool for key in ('include_separation', 'exclude_separation')):
         raise ValidationError("取分离站点选项必须为布尔值")
     return {**task_intent, "cities": list(dict.fromkeys(selected_cities)),
+            **({'merchant_by_city': True} if set(selected) & MERCHANT_DATASETS else {}),
             **({'lanorange_full_delivery': True} if set(selected) & LANORANGE_DATASETS.keys() else {}),
             "datasets": [key for key in DATASETS if key in selected],
             "start": first.isoformat(), "end": last.isoformat(),
             "months": covered_months(first, last),
-            **({"include_separation": True} if payload.get("include_separation") else {}),
+            **({"exclude_separation": payload['exclude_separation']} if 'exclude_separation' in payload
+               else {"include_separation": True} if payload.get("include_separation") else {}),
             **({"refresh_history": True} if payload.get("refresh_history") else {})}
 
 
@@ -527,6 +531,9 @@ def _requested_items(config):
 @profiled('download_task', 1, 'run_dir')
 def execute_downloads(config, run_dir, log, cancelled, update_item, runner_factory=None):
     """Execute selected city/data pairs; a failed pair never publishes files."""
+    if config.get('payroll_unified') and config.get('task_kind')=='payroll_source':
+        from payroll_unified_download import execute
+        return execute(config,run_dir,log,cancelled,update_item,runner_factory)
     root = Path(run_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
     config = dict(config)
@@ -535,6 +542,20 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
     mapping = cities() if config.get('merchant_by_city') or any(kind not in LANORANGE_DATASETS and kind not in MERCHANT_DATASETS and kind not in ('abnormal_riders', BAIZE_DATASET, RIDER_DAILY_DATASET, RIDER_ARCHIVE_DATASET)
                               for kind in selected) else {}
     requested = _requested_items(config)
+    if config.get('payroll_agencies'):
+        if config.get('task_kind') != 'payroll_source':
+            raise ValidationError('合作商范围只能用于核算资料任务')
+        from deduction_stations import _fengshen_client
+        from fengshen_http import AGENCIES_URL
+        client = _fengshen_client()
+        try:
+            authorized = client.request_json('GET', AGENCIES_URL)['data']
+        finally:
+            client.close()
+        for city, agency in config['payroll_agencies'].items():
+            if city not in config['cities'] or not any(str(r.get('agencyId')) == str(agency) and r.get('agencyCityName') == city and r.get('agencySubTypeName') in ('物流服务商','物流合作商') for r in authorized):
+                raise ValidationError('取分离合作商不属于当前账号及本次城市')
+            mapping[city] = str(agency)
     baize_only = selected == {BAIZE_DATASET}
     blue_only = all(value['dataset'] in LANORANGE_DATASETS or value['dataset'] == 'abnormal_riders'
                     for value in requested)
@@ -708,10 +729,9 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
         projection = None
         price_filter = None
         derived = None
-        if description['dataset'] in separation_filter.COLUMNS:
-            # 勾选=仅保留取分离站点，未勾选=排除取分离站点；两种方向都须过滤。
-            # 原始全量文件保留在原始资料目录；成品为按站点关键字过滤的副本。
-            include = bool(config.get('include_separation'))
+        include = separation_filter.filter_direction(config)
+        if description['dataset'] in separation_filter.COLUMNS and include is not None:
+            # 新选项仅在勾选排除时过滤；不勾选保留全量。历史任务沿用原方向。
             if path == target:
                 raise BillCollectionError("取分离过滤不能就地覆盖原文件")
             path, separation = separation_filter.filter_table(
@@ -1077,6 +1097,17 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
                 raw, output = root / "原始资料" / city_name, root
                 raw.mkdir(parents=True)
                 output.mkdir(exist_ok=True)
+                for kind in sorted(city_selected & MERCHANT_DATASETS):
+                    description = item(city, kind)
+                    def city_bill(kind=kind, description=description):
+                        from fengshen_merchant_exports import source_directory, source_key
+                        directory = source_directory(root, kind, city)
+                        context.update(raw=directory, kind=kind)
+                        source = config.get('resume_merchant_sources', {}).get(source_key(city, kind))
+                        path = runner.merchant_source(kind, directory, description['start'], description['end'], source,
+                                                      city=city, agency_id=mapping[city])
+                        return [publish(path, root, description)]
+                    run_step([description], city_bill)
                 if 'payment_binding' in city_selected:
                     from binding_download import month_periods, generate_binding
                     from binding_sources_http import BindingSources
@@ -1117,11 +1148,10 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
                                 info = runner.rider_source(source_plan, source_raw, kind)
                                 source_paths[kind] = _rider_source_file(info, source_raw, kind, source_plan)
                             set_phase('validating')
-                            # 上游资料按站点关键字过滤后再生成（勾选=仅取分离，未勾选=排除取分离），
-                            # 生成表自然只含目标站点。
-                            include = bool(config.get('include_separation'))
+                            # 与账单使用同一范围；全量模式不预先丢弃取分离骑手。
+                            include = separation_filter.filter_direction(config)
                             for kind in source_paths:
-                                if kind in separation_filter.COLUMNS:
+                                if kind in separation_filter.COLUMNS and include is not None:
                                     filtered, proof = separation_filter.filter_table(
                                         source_paths[kind], kind, include, directory)
                                     source_paths[kind] = filtered
@@ -1255,7 +1285,7 @@ def execute_downloads(config, run_dir, log, cancelled, update_item, runner_facto
                     run_step([item(city, "rider_info")], rider_info)
                 if "goods_rent" in city_selected:
                     rent_plan = SimpleNamespace(**vars(plan), month=plan.start[:7],
-                                                include_separation=bool(config.get("include_separation")))
+                                                **{key: config[key] for key in ('include_separation', 'exclude_separation') if key in config})
                     def goods_rent():
                         directory = raw / "goods_rent"
                         context.update(raw=directory, kind="goods_rent")

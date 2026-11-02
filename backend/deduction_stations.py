@@ -118,17 +118,21 @@ def _fengshen_stations(payload, city):
     return sorted(result, key=lambda item: (item['name'], item['id']))
 
 
-def _fengshen(city, version):
+def _fengshen(city, version, include_separation=False):
     from fengshen_http import AGENCIES_URL, TEAMS_URL
     with _collection():
         client = _fengshen_client()
         original, attempted = None, False
         try:
-            cities = _cities(client.request_json('GET', AGENCIES_URL))
+            agencies = client.request_json('GET', AGENCIES_URL)
+            cities = _cities(agencies)
             if not city:
                 return {'cities': cities, 'stations': [], 'scope_note': '当前风神账号可访问的物流合作商城市；选择城市后获取其站点。', 'warnings': []}
             chosen = _choose_city(cities, city)
-            original = _id(client.identity()['agencyId'])
+            identity = client.identity()
+            original = _id(identity['agencyId'])
+            from station_associations import identity_scope
+            account_scope = identity_scope(identity, version)
             attempted = True
             client.select_city(chosen['id'])
             client.assert_city(chosen['id'])
@@ -141,7 +145,17 @@ def _fengshen(city, version):
                 client.assert_city(chosen['id'])
             if not stations:
                 raise HTTPException(502, '风神未返回该城市可核实的站点；未获取不等于没有站点')
-            return {'cities': cities, 'stations': stations, 'scope_note': '所选物流合作商城市下，当前账号可见的风神站点。', 'warnings': []}
+            if include_separation:
+                for row in agencies['data']:
+                    if row.get('agencyCityName') != chosen['name'] or row.get('agencySubTypeName') != '物流服务商':
+                        continue
+                    other = {**chosen, 'id': _id(row['agencyId'])}
+                    client.select_city(other['id']);client.assert_city(other['id'])
+                    extra = _fengshen_stations(client.request_json('POST', TEAMS_URL, body={}), other)
+                    stations.extend({**s, 'city_id': chosen['id'], 'agency_id': other['id'], 'separation': True} for s in extra if '取分离' in s['name'])
+                if len({s['id'] for s in stations}) != len(stations):
+                    raise HTTPException(502, '跨合作商站点编号重复，请核对后台目录')
+            return {'cities': cities, 'stations': stations, 'account_scope': account_scope, 'scope_note': '所选物流合作商城市下，当前账号可见的风神站点。', 'warnings': []}
         finally:
             try:
                 if attempted and original:
@@ -184,7 +198,7 @@ def _lighthouse_context(state):
     return supplier, operator
 
 
-def _station_rows():
+def _station_rows(context=None):
     """Verified official RSS station selector; no board/rider queries or exports."""
     import requests
     import xiaoxiang_lighthouse as lighthouse
@@ -221,12 +235,16 @@ def _station_rows():
     rows = body.get('data')
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise HTTPException(502, '灯塔站点目录结构变化，请暂用手动维护')
+    if context is not None:
+        from station_associations import identity_scope
+        context['account_scope'] = identity_scope({'supplierId':supplier,'userId':operator}, _version('xiaoxiang'))
     return rows
 
 
 def _xiaoxiang(city, version):
+    context = {}
     with _collection():
-        rows = _station_rows()
+        rows = _station_rows(context)
     stations, seen, cities = [], set(), {}
     missing = 0
     for row in rows:
@@ -256,12 +274,12 @@ def _xiaoxiang(city, version):
     if city:
         chosen = _choose_city(cities, city)
         stations = [item for item in stations if item['city_id'] == chosen['id']]
-    return {'cities': cities, 'stations': sorted(stations, key=lambda item: (item['city'], item['name'], item['id'])),
+    return {**context, 'cities': cities, 'stations': sorted(stations, key=lambda item: (item['city'], item['name'], item['id'])),
             'scope_note': '当前灯塔账号及合作商权限内的站点目录；城市使用后台业务城市，管理城市另行保留。',
             'warnings': warnings}
 
 
-def catalog(platform: str, city: str = '', refresh: bool = False) -> dict:
+def catalog(platform: str, city: str = '', refresh: bool = False, include_separation: bool = False) -> dict:
     if platform not in ('fengshen', 'xiaoxiang') or not isinstance(city, str) or len(city) > 200 or type(refresh) is not bool:
         raise HTTPException(400, '请选择风神或灯塔及有效城市')
     from fengshen_bill import AuthenticationRequired
@@ -279,12 +297,12 @@ def catalog(platform: str, city: str = '', refresh: bool = False) -> dict:
         if _versions.get(platform) != version:
             _discard(platform)
             _versions[platform] = version
-        key = (platform, version, city)
+        key = (platform, version, city, include_separation)
         cached = _cache.get(key)
         if cached and not refresh and time.monotonic() - cached[0] < CACHE_SECONDS:
             return {**copy.deepcopy(cached[1]), 'cached': True}
         try:
-            value = _fengshen(city, version) if platform == 'fengshen' else _xiaoxiang(city, version)
+            value = _fengshen(city, version, True) if platform == 'fengshen' and include_separation else _fengshen(city, version) if platform == 'fengshen' else _xiaoxiang(city, version)
         except (AuthenticationRequired, SessionExpired):
             _discard(platform)
             raise HTTPException(401, '平台登录已失效，请重新登录后获取站点') from None

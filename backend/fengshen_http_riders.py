@@ -276,8 +276,9 @@ class RiderHttpCollector:
         """
         self._checkpoint()
         teams, _ = self._teams(plan)
-        include = getattr(plan, "include_separation", False)
-        selected = {tid: name for tid, name in teams.items() if kept(name, include)}
+        from separation_filter import filter_direction
+        include = filter_direction(vars(plan))
+        selected = {tid: name for tid, name in teams.items() if include is None or kept(name, include)}
         output = Path(raw).resolve()
         output.mkdir(parents=True, exist_ok=True)
         target = output / f"goods_rent_{plan.start}_{plan.end}.xlsx"
@@ -305,16 +306,17 @@ class RiderHttpCollector:
         info = {"rows": rows, "status": "validated" if rows else "empty", "scope": "target_city",
                 "city": plan.city, "agency_id": plan.agency_id,
                 "requested_start": plan.start, "requested_end": plan.end, "requested_month": plan.month,
-                "all_target_teams": not getattr(plan, "include_separation", False),
+                "all_target_teams": include is None,
                 "selected_team_ids": sorted(selected), "team_count": len(teams),
-                "separation_mode": "include" if include else "exclude",
+                "separation_mode": "all" if include is None else "include" if include else "exclude",
                 "snapshot_only": True, "time_basis": "current_snapshot",
                 "path": target.name, "bytes": target.stat().st_size, "sha256": digest}
         result = {**info, "dataset": "goods_rent", "kind": "goods_rent", "start": plan.start,
                   "end": plan.end, "month": plan.month, "target_city_only": True,
                   "binding_generated": False, "payroll_executed": False, "transport": "http"}
         atomic_json(output / "source_receipt.json", result)
-        self.log(f'[完成] 物资租用登记：{rows} 条（{"含" if include else "不含"}取分离站点）；原文件已校验保存')
+        scope = '全部站点' if include is None else '仅取分离站点' if include else '排除取分离站点'
+        self.log(f'[完成] 物资租用登记：{rows} 条（{scope}）；原文件已校验保存')
         return result
 
     def _validate_goods_rent(self, path, selected):

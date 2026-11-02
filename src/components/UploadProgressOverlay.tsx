@@ -40,7 +40,7 @@ export function UploadProgressOverlay({ status }: UploadProgressOverlayProps) {
     {
       id: 'zipping',
       label: '整理上传文件',
-      description: size ? `文件包大小: ${size}` : '正在打包所选文件...',
+      description: size ? `文件包大小: ${size}` : stage === 'zipping' && typeof percent === 'number' ? `正在整理所选文件 ${percent}%` : '正在整理所选文件...',
       icon: FileArchive,
     },
     {

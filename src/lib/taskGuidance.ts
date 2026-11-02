@@ -21,7 +21,8 @@ export function taskGuidance(task: TaskContext): TaskGuidance {
   if (status === 'waiting_login') return result('等待认证', '完成对应平台登录后，回到原任务继续。', '完成验证', 'warning');
   if (status === 'waiting_manual') return result('等待验证', '完成平台人工验证，再检查原任务。', '完成验证', 'warning');
   if (status === 'needs_review') return result('待核实', '先核实已提交的结果，避免重复操作。', '核实结果', 'warning');
-  if (status === 'waiting_materials') return result('待补资料', '打开核算批次，处理清单中的缺项。', '补齐资料', 'warning');
+  if (status === 'awaiting_confirmation') return kind==='payroll'?result('待继续执行','打开原批次，继续自动获取资料并核算。','继续执行','warning'):result('待确认扣款', '确认扣款后自动获取资料并核算。', '确认扣款', 'warning');
+  if (status === 'waiting_materials') return result('获取已暂停', kind==='payroll'?'模板或配送费不可用，请重新上传模板发起新任务。':'完成平台登录或重试失败项后继续原批次。', '处理异常', 'warning');
   if (status === 'pending_download') return result('待准备资料', '打开核算批次，准备本次所需资料。', '准备资料', 'warning');
   if (status === 'ready') return result('资料已就绪', '资料已准备好，可继续本批次核算。', '继续核算', 'success');
   if (['queued', 'running', 'preparing', 'calculating', 'stopping', 'cancelling'].includes(status)) {

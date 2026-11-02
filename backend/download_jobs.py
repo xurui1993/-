@@ -86,9 +86,12 @@ def _fingerprint(config):
         public["refresh_history"] = True
     if config.get("include_separation"):
         public["include_separation"] = True
+    if 'exclude_separation' in config:
+        public['exclude_separation'] = config['exclude_separation']
     if config.get('lanorange_by_city'): public['lanorange_by_city'] = True
     if config.get('lanorange_full_delivery'): public['lanorange_full_delivery'] = True
     if config.get('merchant_by_city'): public['merchant_by_city'] = True
+    if config.get('payroll_agencies'): public['payroll_agencies'] = config['payroll_agencies']
     for key in ("resume_detail_from", "retry_of", "retry_items"):
         if key in config:
             public[key] = config[key]
@@ -340,6 +343,11 @@ class DownloadManager:
         lanorange_full_delivery = config.get('lanorange_full_delivery') is True
         merchant_by_city = config.get('merchant_by_city') is True
         business_intent = {key: config[key] for key in ('task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace') if key in config}
+        if config.get('include_separation') is True: business_intent['include_separation'] = True
+        if 'exclude_separation' in config: business_intent['exclude_separation'] = config['exclude_separation']
+        if config.get('payroll_agencies'): business_intent['payroll_agencies'] = config['payroll_agencies']
+        if config.get('task_kind')=='payroll_source' and config.get('payroll_unified'):
+            business_intent.update(payroll_unified=True,payroll_scope_mode=config.get('payroll_scope_mode','legacy'),payroll_scope_agencies=config.get('payroll_scope_agencies',[]))
         config = json.loads(json.dumps({key: config[key] for key in ("cities", "datasets", "start", "end", "months")},
                                        ensure_ascii=False))
         config.update(business_intent)
@@ -411,6 +419,7 @@ class DownloadManager:
                     raise DownloadArchiveError("无法分配唯一归档目录，请稍后重试；已有任务未改变")
                 run = {"id": run_id, "status": "queued", "created_at": created_at,
                        **{key: config[key] for key in ('task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace') if key in config},
+                       **{key: config[key] for key in ('include_separation', 'exclude_separation') if key in config},
                        **({'lanorange_by_city': True} if config.get('lanorange_by_city') else {}),
                        **({'lanorange_full_delivery': True} if config.get('lanorange_full_delivery') else {}),
                        **({'merchant_by_city': True} if config.get('merchant_by_city') else {}),
@@ -960,6 +969,8 @@ class DownloadManager:
             if config.get('lanorange_by_city'): requested_config['lanorange_by_city'] = True
             if config.get('lanorange_full_delivery'): requested_config['lanorange_full_delivery'] = True
             if config.get('merchant_by_city'): requested_config['merchant_by_city'] = True
+            for option in ('include_separation', 'exclude_separation', 'payroll_agencies', 'task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace'):
+                if option in config: requested_config[option] = config[option]
             requested_config.update(cities=selected_cities, datasets=selected_datasets,
                                     retry_of=run_id, retry_items=sorted(items, key=_key))
             if config.get("refresh_history"):
@@ -1328,7 +1339,7 @@ class DownloadManager:
                 **({'delivery_kind': info['delivery_kind']} if info.get('delivery_kind') in ('platform_original','system_merged') else {}),
                 **({'artifact_role': 'summary'} if is_summary else {})}
 
-    def get_file(self, owner, run_id, file_id):
+    def get_file(self, owner, run_id, file_id, verify_integrity=True):
         with self._lock, self._connection() as connection:
             _, run = self._find(connection, owner, run_id)
             entry = next((item for item in run["files"] if item["id"] == file_id), None)
@@ -1337,6 +1348,8 @@ class DownloadManager:
             path = self._artifact_path(run,entry)
             if not path.is_file():
                 raise DownloadNotFound("下载文件不存在")
+            if not verify_integrity:
+                return path, path.name
             if path.stat().st_size != entry["bytes"]:
                 raise DownloadNotFound("下载文件已变更")
             with path.open("rb") as stream:

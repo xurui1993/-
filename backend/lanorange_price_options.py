@@ -29,7 +29,7 @@ def load_directory(api):
         # No unscoped/no-permission endpoint, fabricated city, or silent relabel.
         if city_id not in city_names:continue
         sites[key]={'id':key,'name':row['siteName'],'city':city_names[city_id], 'city_id':city_id}
-    return {'cities': sorted(set(city_names.values())),
+    return {'cities': sorted(set(city_names.values())), 'city_entries': [{'id': key, 'name': name} for key, name in city_names.items()],
             'stations': sorted(sites.values(), key=lambda row:(row['city'],row['name'],row['id']))}
 
 

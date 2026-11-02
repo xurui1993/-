@@ -53,6 +53,9 @@ def build_review(state, stats, application=None):
     metrics = [{'key': 'applicants', 'label': '申请记录数', 'value': state['plan'].get('applicants'), 'unit': '条', 'note': '预检通过的申请行数，同一骑手可能存在多行'}]
     metrics.extend({'key': key, 'label': label, 'value': metric_value(stats, key), 'unit': unit, 'note': note} for key, label, unit, note in METRICS)
     issues = []
+    zero_stations = state.get('automatic_deductions', {}).get('zero_stations', [])
+    if zero_stations:
+        issues.append({'code':'automatic_zero_deductions','label':'无扣款配置站点按零扣款计算','count':len(zero_stations),'location':'、'.join(zero_stations)})
     if application:
         metrics.insert(1, {'key': 'unique_applicants', 'label': '申请骑手去重数', 'value': application['unique_riders'], 'unit': '人', 'note': '仅按申请名单骑手ID去重，不等于输出覆盖人数'})
         if application['duplicate_rows']:
@@ -81,7 +84,7 @@ def build_review(state, stats, application=None):
             'issues': issues, 'sources': sources, 'application': application,
             'template': {'name': state['plan']['template'], 'sha256': state.get('template_hash')},
             'deduction_version': state.get('deductions', {}).get('version'),
-            'input_check': '运行前已按保存的SHA256校验输入；不代表业务数据本身准确完整',
+            'input_check': '按可读取资料执行；未进行站点归属、SHA256及跨来源一致性校验' if state.get('input_policy')=='readable_delivery_v1' else '运行前已按保存的SHA256校验输入；不代表业务数据本身准确完整',
             'money_check': '待用Excel/WPS重算并人工核对金额；系统未确认发薪或业务验收'}
 
 

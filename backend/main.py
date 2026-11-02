@@ -52,6 +52,9 @@ async def lifespan(app):
     from download_path_registry import refresh_protected_roots
     refresh_protected_roots()
     if os.environ.get('LOCAL_TEST_MODE') != '1':
+        from payroll_queue import get_queue
+        get_queue()
+    if os.environ.get('LOCAL_TEST_MODE') != '1':
         source_auth.start_keepalive()
         from xiaoxiang_source_auth import AUTH as xiang_auth
         xiang_auth.start_keepalive()
@@ -63,6 +66,8 @@ async def lifespan(app):
         shutdown_approvals()
         from lanorange_price_export import shutdown as shutdown_prices
         shutdown_prices()
+        from payroll_queue import shutdown_queue
+        shutdown_queue()
         shutdown_manager()
 
 
@@ -86,6 +91,8 @@ app.include_router(lanorange_approvals_router)
 app.include_router(lanorange_prices_router)
 app.include_router(payroll_inputs_router)
 app.include_router(workbench_router)
+from payroll_queue import router as payroll_queue_router
+app.include_router(payroll_queue_router)
 from task_center import router as task_center_router
 app.include_router(task_center_router)
 
@@ -103,6 +110,8 @@ class ConfigRequest(BaseModel):
     deductionRules: list = []
     taskQueue: list = None
     payrollSourceMode: str = "fengshen"
+    payrollOnlySeparation: bool = False
+    payrollExcludeSeparation: bool = True
     payrollPreparationId: str = ""
     preparationOnly: bool = False
     deductionConfigVersion: str = ""
@@ -638,7 +647,8 @@ async def run_calculation(config: ConfigRequest, request: Request):
                 return
         except Exception as e:
             yield f"data: {json.dumps({'type': 'log', 'msg': f'致命内部错误: {str(e)}', 'level': 'ERROR'})}\n\n"
-            yield f"data: {json.dumps({'type': 'finish', 'status': 'error', 'result_msg': str(e)})}\n\n"
+            message = '任务已结束，详情见执行日志' if config.action=='core' and config.payrollSourceMode=='fengshen' else str(e)
+            yield f"data: {json.dumps({'type': 'finish', 'status': 'error', 'result_msg': message})}\n\n"
 
     from workbench import detached_events
     return StreamingResponse(detached_events(event_generator()), media_type="text/event-stream")

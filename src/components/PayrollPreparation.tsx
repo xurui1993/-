@@ -8,6 +8,18 @@ export interface PayrollPreparationState {
   id: string;
   mode: 'manual' | 'fengshen' | 'xiaoxiang';
   status: string;
+  workflow?: string;
+  only_separation?: boolean;
+  exclude_separation?: boolean;
+  download_scope?: string;
+  execution_logs?: {text:string;level:string}[];
+  input_policy?: string;
+  automatic_deductions?: {zero_stations:string[];sources:{station:{name:string};source:string}[]};
+  pause_reason?: string;
+  stop_requested?: boolean;
+  execution?: {waiting_login:boolean;phase:string};
+  execution_started_at?: string;
+  downloads?: {key:string;label:string;status:string;detail:string;completed_groups:number;total_groups:number;groups:{scope:string;label:string;status:string;detail:string;error?:string;files:string[]}[]}[];
   performance?: PayrollPerformance;
   created_at?: string;
   result?: { output: string; input_hashes_verified: boolean; review_summary?: PayrollReview };
@@ -275,7 +287,7 @@ export const PayrollPreparation = React.memo(function PayrollPreparation({value,
     {error && <p role="alert" className="text-sm text-rose-600">{error}</p>}
     {!busy && value.status === 'pending_download' && <div className="wb-action-bar"><span className="wb-muted">{value.plan.city} · {missing} 项待准备</span><button className="wb-primary" disabled={pending} onClick={onContinue}>下载本批次缺项</button><button className="wb-button" disabled={pending} onClick={() => void findReusable()}>查找本批次可复用资料</button></div>}
     {reusable && <div className="wb-reusable"><p className="wb-muted">仅列出城市、周期完全匹配且已完成的资料。引用后保留来源及文件校验记录。</p>{!reusable.length && <p className="wb-muted">暂无符合条件的已有资料，可下载或手动补传。</p>}{reusable.map(file => <div className="wb-row wb-space" key={`${file.run_id}:${file.file_id}`}><span className="wb-file-name">{file.name}<small className="block wb-muted">{file.created_at}</small></span><button className="wb-button" disabled={pending} onClick={() => void reuse(file)}>引用此文件到本批次</button></div>)}</div>}
-    {!busy && value.status === 'ready' && <div className="wb-action-bar"><span className="wb-muted">资料已就绪 · 恢复后使用已保存的扣款规则</span><button disabled={pending} onClick={onContinue} className="wb-primary">继续处理</button></div>}
+    {!busy && value.status === 'ready' && <div className="wb-action-bar"><span className="wb-muted">资料已就绪 · 核对本次扣款金额和站点归属</span><button disabled={pending} onClick={onContinue} className="wb-primary">确认扣款清单</button></div>}
     {!busy && value.status === 'preparing' && <button disabled={pending} onClick={onContinue} className="rounded border border-blue-600 text-blue-700 bg-blue-50 px-4 py-2">继续检查原下载任务</button>}
     {value.jobs.length > 0 && <details className="wb-advanced"><summary>资料处理记录</summary><p className="wb-muted">关联下载：{value.jobs.map(id => id.slice(0, 6).toUpperCase()).join('、')}。认证与恢复沿用原任务。</p></details>}
   </section>;

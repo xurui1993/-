@@ -9,6 +9,7 @@ import { createDownloadProxy } from "./server/downloadProxy.ts";
 import { acquireStartupLock, assertPortAvailable } from "./server/startupGuard.ts";
 import { createLegacyBoundary } from "./server/legacyDownloadBoundary.ts";
 import { deliveryDownloadAlias } from './server/deliveryDownloadAlias.ts';
+import { extractSourceArchive } from './server/sourceArchive.ts';
 import http from "node:http";
 import fs from "fs";
 import os from "os";
@@ -136,6 +137,8 @@ async function startServer() {
   const releaseStartupLock = acquireStartupLock(lockFilePath);
   process.once("exit", releaseStartupLock);
   const server = http.createServer(app);
+  // A local 1–2 GiB upload can exceed Node's five-minute request deadline.
+  server.requestTimeout = 60 * 60 * 1000;
   try {
     await assertPortAvailable(backendPort, "127.0.0.1");
     // Own the frontend port before starting Python. A second launch must not
@@ -514,6 +517,10 @@ async function startServer() {
       cb(null, dir);
     },
     filename: (req, file, cb) => {
+      if (req.path === '/api/upload/source_zip') {
+        cb(null, `source_upload_${randomUUID()}.zip`);
+        return;
+      }
       // Retain original filename, fix potential multer string encoding issue
       let decodedName = file.originalname;
       try {
@@ -525,6 +532,7 @@ async function startServer() {
     },
   });
   const upload = multer({ storage });
+  const sourceUpload = multer({storage, limits: {fileSize: 11 * 1024 ** 3, files: 1}});
 
   app.get("/api/salary_bind/download", (req, res) => {
     try {
@@ -844,7 +852,11 @@ async function startServer() {
 
   app.post(
     "/api/upload/source_zip",
-    upload.single("file") as any,
+    (req: any, res: any, next: any) => sourceUpload.single('file')(req, res, (error: any) => {
+      if (error) return res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({success: false,
+        error: error.code === 'LIMIT_FILE_SIZE' ? '上传文件包超过11GiB传输限制（资料解压后单批最多10GiB）' : '上传请求无效，请一次选择一批资料'});
+      next();
+    }),
     async (req: any, res: any) => {
       const processingStarted = performance.now();
       try {
@@ -864,26 +876,8 @@ async function startServer() {
         );
         fs.mkdirSync(targetDir, { recursive: true });
 
-        const zip = new AdmZip(zipPath);
-        const entries = zip.getEntries();
-        if (entries.length === 0 || entries.length > 2000 ||
-            entries.reduce((sum, entry) => sum + entry.header.size, 0) > 512 * 1024 * 1024) {
-          throw new Error("上传压缩包为空或超过文件数量/大小限制");
-        }
-        const seenEntries = new Set<string>();
-        for (const entry of entries) {
-          const name = entry.entryName.replace(/\\/g, "/");
-          const resolved = path.resolve(targetDir, name);
-          const relative = path.relative(targetDir, resolved);
-          if (name.includes(":") || path.isAbsolute(name) || name.split("/").includes("..") ||
-              relative.startsWith("..") || path.isAbsolute(relative) || seenEntries.has(name.toLowerCase()) ||
-              entry.header.size > 200 * 1024 * 1024) {
-            throw new Error("上传压缩包包含越界/重复路径或过大文件");
-          }
-          seenEntries.add(name.toLowerCase());
-        }
         const extractionStarted = performance.now();
-        zip.extractAllTo(targetDir, true);
+        await extractSourceArchive(pythonCmd, process.cwd(), zipPath, targetDir);
         const extractionSeconds = (performance.now() - extractionStarted) / 1000;
         const indexingStarted = performance.now();
 
@@ -1149,7 +1143,7 @@ async function startServer() {
         try { fs.writeFileSync(path.join(absolutePath, '.upload_diagnostics.json'), JSON.stringify(timings), 'utf8'); } catch { /* Diagnostics are best effort. */ }
         res.json({ success: true, path: absolutePath, smart: true, tasks, timings });
       } catch (e) {
-        res.status(500).json({ success: false, error: String(e) });
+        res.status(400).json({ success: false, error: e instanceof Error ? e.message : String(e) });
       }
     },
   );

@@ -23,10 +23,9 @@ export function LanorangePriceFilters({apiFetch,workspaceId,city,station,month,o
   const selectedId=chosen.length===1?chosen[0].id:station?'legacy':'';
   const waiting=disabled || busy || !options;
   return <>
-    <label>城市<select className="wb-select" aria-label="城市" disabled={waiting} value={city} onChange={e=>changeRef.current({city:e.target.value,station:'',month})}><option value="">全部城市</option>{city && !options?.cities.includes(city) && <option value={city} disabled>{city}（原选择，请重新选择）</option>}{options?.cities.map(c=><option key={c} value={c}>{c}</option>)}</select></label>
+    <label>城市<select className="wb-select" aria-label="城市" disabled={waiting} value={city} onChange={e=>changeRef.current({city:e.target.value,station:'',month})}><option value="">全部城市</option>{city && !options?.cities.includes(city) && <option value={city} disabled>{city}（原选择，请重新选择）</option>}{options?.cities.map(c=><option key={c} value={c}>{c} · {new Set(options?.stations.filter(s=>s.city===c).map(s=>s.id)).size}站</option>)}</select></label>
     <label>站点<select className="wb-select" aria-label="站点" disabled={waiting} value={selectedId} onChange={e=>{const selected=stations.find(s=>s.id===e.target.value);if(selected?.ambiguous)return;changeRef.current({city,station:selected?.name||'',month});}}><option value="">全部站点</option>{selectedId==='legacy'&&<option value="legacy" disabled>{station}（请重新选择）</option>}{stations.map(s=><option key={s.id} value={s.id} disabled={s.ambiguous}>{s.label}{s.ambiguous?'（同名，请限定城市或核对）':''}</option>)}</select></label>
     <label>结算月份<select className="wb-select" aria-label="结算月份" required={requiredMonth} disabled={disabled || busy || !options} value={month} onChange={e=>changeRef.current({city,station,month:e.target.value})}><option value="">{requiredMonth?'请选择结算月份':'全部月份'}</option>{month && !options?.months.includes(month) && <option value={month} disabled>{month}（原选择，请重新选择）</option>}{options?.months.map(m=><option key={m} value={m}>{m}</option>)}</select></label>
-    <button type="button" className="wb-button" disabled={disabled || busy} onClick={()=>setReload(v=>v+1)}>{busy?'读取筛选条件…':'刷新筛选条件'}</button>
     {error && <p className="wb-error" role="alert">{error}</p>}
   </>;
 }

@@ -78,6 +78,39 @@ def _norm_daily_key(date_v, rid_v, site_v):
     site = str(site_v).strip()
     return (d, rid, site)
 
+
+def _payroll_roster(attendance, applicants):
+    """One wage/deduction row per site and rider; a display name is not an ID.
+
+    Keep the original daily groups for order counting and price matching. Only
+    the resulting payroll roster resolves name variants, preferring the uploaded
+    application and otherwise the latest non-empty source name deterministically.
+    """
+    def clean(value):
+        return '' if pd.isna(value) else str(value).strip()
+
+    preferred, rider_names = {}, {}
+    for row in applicants.itertuples(index=False, name=None):
+        team, rider, name = map(clean, row)
+        rider = rider.removesuffix('.0')
+        if rider and name:
+            preferred.setdefault((team, rider), name)
+            rider_names.setdefault(rider, set()).add(name)
+    candidates = attendance[['_date', '_tid', '_rid', 'rname']].copy()
+    candidates['rname'] = candidates['rname'].map(clean)
+    candidates = candidates[candidates['rname'] != ''].sort_values(
+        ['_date', 'rname'], ascending=[False, True], kind='stable')
+    fallback = candidates.drop_duplicates(['_tid', '_rid']).set_index(['_tid', '_rid'])['rname'].to_dict()
+    roster = attendance[['_tid', '_rid']].drop_duplicates().copy()
+    roster['rname'] = [
+        preferred.get((site, rider))
+        or (next(iter(rider_names[rider])) if len(rider_names.get(rider, ())) == 1 else '')
+        or fallback.get((site, rider), '')
+        for site, rider in roster.itertuples(index=False, name=None)
+    ]
+    return roster
+
+
 def extract_past_records(out_folder):
     # 处理逻辑：extract_past_records 的主要执行逻辑
     past_attendance_dict = {}
@@ -700,6 +733,9 @@ def process_rider_data(city, selected_option, source_folder, base_path, log_call
         # 兼容文本形式的日期和Excel导出的纯数值形式（4xxxx）日期
         # 使用assign重新赋值避免pandas inplace assignment int64的报错
         df_apply = df_apply.assign(**{col3: col3_data, col4: col4_data})
+        # Freeze the application identity columns before source parsers reuse
+        # rider_id_idx/rider_name_idx for their own unrelated column positions.
+        applicant_identity = df_apply.iloc[:, [team_idx, rider_id_idx, rider_name_idx]].copy()
         
         first_date = df_apply[col3].min()
         last_date = df_apply[col4].max()
@@ -859,8 +895,8 @@ def process_rider_data(city, selected_option, source_folder, base_path, log_call
             explanation.append(['资料准备编号', snapshot['id'], '准备方式', snapshot['mode']])
             explanation.append(['资料', '使用状态', '来源/说明'])
             for entry in snapshot['items'].values():
-                explanation.append([entry['label'], '已提供' if entry['status'] == 'ready' else '未提供',
-                    '使用本次校验资料' if entry['status'] == 'ready' else '明确未提供；不代表平台没有数据'])
+                explanation.append([entry['label'], '已提供' if entry['status'] == 'ready' else '未参与核算',
+                    ('使用本次可读取资料' if snapshot.get('input_policy')=='readable_delivery_v1' else '使用本次校验资料') if entry['status'] == 'ready' else entry.get('note') or '本次未取得可用资料，未参与核算'])
             explanation.column_dimensions['A'].width = 24
             explanation.column_dimensions['B'].width = 36
             explanation.column_dimensions['C'].width = 56
@@ -2677,7 +2713,7 @@ def process_rider_data(city, selected_option, source_folder, base_path, log_call
                 progress_callback(current_progress, f"清洗解析并注入管线：{wb_name[:12]} ({processed_count}/{total_files})")
 
             except KeyError as e:
-                if kwargs.get('strict_inputs'):
+                if kwargs.get('strict_inputs') and (not kwargs.get('relaxed_optional_inputs') or kw=='配送费'):
                     raise RuntimeError(f"必要输入 [{wb_name}] 缺失关键列，核算已停止") from e
                 log(f"-> ⚠️ [ Key/列名缺失 (KeyError) ] 处理表格文件 [{wb_name}] 失败: 缺失必要列 {e}。算薪引擎已自动隔离异常，跳过此文件后续核算，继续处理队列中下一个文件。", "WARN")
                 processed_count += 1
@@ -2685,7 +2721,7 @@ def process_rider_data(city, selected_option, source_folder, base_path, log_call
                 progress_callback(min(1.0, current_progress), f"跳过缺失列文件：{wb_name[:12]}")
                 continue
             except ValueError as e:
-                if kwargs.get('strict_inputs'):
+                if kwargs.get('strict_inputs') and (not kwargs.get('relaxed_optional_inputs') or kw=='配送费'):
                     raise RuntimeError(f"必要输入 [{wb_name}] 数据转换失败，核算已停止") from e
                 log(f"-> ⚠️ [ 数据类型转换失败 (ValueError) ] 处理表格文件 [{wb_name}] 失败: {e}。算薪引擎已自动隔离异常，跳过此文件后续核算，继续处理队列中下一个文件。", "WARN")
                 processed_count += 1
@@ -2693,7 +2729,7 @@ def process_rider_data(city, selected_option, source_folder, base_path, log_call
                 progress_callback(min(1.0, current_progress), f"跳过类型转换失败文件：{wb_name[:12]}")
                 continue
             except Exception as e:
-                if kwargs.get('strict_inputs') or "骑手账单" in wb_name or kw == "骑手账单":
+                if (kwargs.get('strict_inputs') or "骑手账单" in wb_name or kw == "骑手账单") and (not kwargs.get('relaxed_optional_inputs') or kw=='配送费'):
                     raise RuntimeError(f"必要输入 [{wb_name}] 解析失败，核算已停止: {e}") from e
                 log(f"-> ⚠️ [ 表格核算异常 ({type(e).__name__}) ] 处理表格文件 [{wb_name}] 失败: {e}。算薪引擎已自动隔离异常，跳过此文件后续核算，继续处理队列中下一个文件。", "WARN")
                 processed_count += 1
@@ -3287,8 +3323,8 @@ def process_rider_data(city, selected_option, source_folder, base_path, log_call
                     attendance_counts = pd.merge(best_teams, rider_attendance, on='_rid', how='left')
                     attendance_counts['出勤天'] = attendance_counts['出勤天'].fillna(0).astype(int)
                 
-                # 提取所有出现的去重的团队和骑手信息
-                df_all = df_att[['_tid', '_rid', 'rname']].drop_duplicates()
+                # 同站同 ID 仅一条工资/扣款记录；姓名异体字不能再次生成工资条。
+                df_all = _payroll_roster(df_att, applicant_identity)
                 df_sht2 = pd.merge(df_all, attendance_counts, on=['_tid', '_rid'], how='left')
                 df_sht2['出勤天数'] = df_sht2['出勤天'].fillna(0).astype(int)
                 df_sht2['本期出勤天'] = df_sht2['出勤天数']

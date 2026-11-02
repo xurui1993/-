@@ -7,8 +7,9 @@ import { TaskOutcome } from '../src/components/TaskOutcome';
 import { CollectionScope } from '../src/components/CollectionScope';
 
 test('payroll records distinguish materials, preparation and continuing calculation', () => {
+  assert.equal(taskGuidance({status:'awaiting_confirmation',kind:'payroll'}).action,'继续执行');
   assert.equal(taskGuidance({status:'pending_download',kind:'payroll'}).action,'准备资料');
-  assert.equal(taskGuidance({status:'waiting_materials',kind:'payroll'}).action,'补齐资料');
+  assert.equal(taskGuidance({status:'waiting_materials',kind:'payroll'}).action,'处理异常');
   assert.equal(taskGuidance({status:'ready',kind:'payroll'}).action,'继续核算');
   assert.equal(taskGuidance({status:'waiting_login'}).action,'完成验证');
   assert.equal(taskGuidance({status:'needs_review'}).action,'核实结果');

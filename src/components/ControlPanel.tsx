@@ -14,8 +14,11 @@ interface ControlPanelProps {
  */
 export function ControlPanel({ payrollSourceMode = 'fengshen', onUploadFiles, onOpenTemplates, isRunning = false }: ControlPanelProps) {
   const [isDragging, setIsDragging] = useState(false);
+  const [error, setError] = useState('');
+  const automatic = payrollSourceMode === 'fengshen';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const multiFileInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { setError(''); setIsDragging(false); }, [payrollSourceMode]);
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -31,6 +34,17 @@ export function ControlPanel({ payrollSourceMode = 'fengshen', onUploadFiles, on
     setIsDragging(false);
 
     if (!onUploadFiles || isRunning) return;
+    setError('');
+    if (automatic) {
+      const items = Array.from(e.dataTransfer.items || []);
+      if (items.some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
+        setError('闪购自动仅支持上传申请表文件，请勿拖入文件夹。');
+        return;
+      }
+      const files = Array.from(e.dataTransfer.files);
+      await onUploadFiles(files.map(file => ({file, relativePath:file.name})));
+      return;
+    }
 
     const items = e.dataTransfer.items;
     const filesToUpload: { file: File; relativePath: string }[] = [];
@@ -80,7 +94,8 @@ export function ControlPanel({ payrollSourceMode = 'fengshen', onUploadFiles, on
   };
 
   const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!onUploadFiles || !e.target.files) return;
+    if (!onUploadFiles || !e.target.files || isRunning) return;
+    setError('');
     const files = e.target.files;
     const filesToUpload: { file: File; relativePath: string }[] = [];
     for (let i = 0; i < files.length; i++) {
@@ -95,17 +110,16 @@ export function ControlPanel({ payrollSourceMode = 'fengshen', onUploadFiles, on
     }
   };
 
-  return <div className={`wb-upload ${isDragging ? 'dragging' : ''}`} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={processDrop}>
-    <input ref={fileInputRef} type="file" className="hidden" webkitdirectory="true" {...({ directory: 'true' } as any)} onChange={handleFileInput} aria-label="选择资料文件夹" />
-    <input ref={multiFileInputRef} type="file" className="hidden" multiple accept=".xlsx,.xls,.csv,.txt" onChange={handleFileInput} aria-label="模板及补充资料" />
-    <UploadCloud size={25} className="mx-auto text-sky-600" />
-    <h3>{payrollSourceMode === 'xiaoxiang' ? '上传灯塔薪资申请表与日期配送单' : payrollSourceMode === 'manual' ? '上传薪资申请表与已有资料' : '上传薪资申请表（标准模板）'}</h3>
-    <p className="wb-muted">{payrollSourceMode === 'fengshen' ? '根据「薪资申请表（标准模板）」自动识别城市与周期，随后准备所需资料。' : '「薪资申请表（标准模板）」与配送资料必需，其他资料可一并上传。'}</p>
-    <div className="wb-row wb-action-bar wb-upload-actions">
-      <button type="button" className="wb-primary" disabled={isRunning} onClick={handleClick}>选择文件</button>
-      <button type="button" className="wb-button" disabled={isRunning} onClick={() => fileInputRef.current?.click()}>选择文件夹</button>
-      {onOpenTemplates && <button type="button" className="wb-button" onClick={onOpenTemplates}>获取标准模板</button>}
+  return <div className={`pq-upload ${isDragging ? 'dragging' : ''}`} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={processDrop}>
+    {!automatic && <input ref={fileInputRef} type="file" className="hidden" webkitdirectory="true" {...({ directory: 'true' } as any)} onChange={handleFileInput} aria-label="选择资料文件夹" />}
+    <input ref={multiFileInputRef} type="file" className="hidden" multiple accept={automatic?'.xlsx':'.xlsx,.xls,.csv,.txt'} onChange={handleFileInput} aria-label={automatic?'上传薪资申请表':'模板及补充资料'} />
+    <div className="pq-upload-copy"><UploadCloud size={24}/><div><h3>{payrollSourceMode === 'xiaoxiang' ? '添加小象核算资料' : automatic ? '添加核算模板' : '添加模板与核算资料'}</h3>
+    <p>{automatic ? '支持多份 .xlsx 标准模板，上传后按顺序自动执行。' : payrollSourceMode === 'manual' ? '上传多个 template 及其资料，按模板所在目录建立任务。' : '上传小象模板与日期命名的配送单。'}</p></div></div>
+    <div className="pq-upload-actions">
+      <button type="button" className="wb-primary" disabled={isRunning} onClick={handleClick}>{isRunning?'正在添加…':automatic?'选择模板':'选择文件'}</button>
+      {!automatic && <button type="button" className="wb-button" disabled={isRunning} onClick={() => fileInputRef.current?.click()}>选择文件夹</button>}
+      {onOpenTemplates && <button type="button" className="wb-link" onClick={onOpenTemplates}>标准模板</button>}
     </div>
-    <p className="wb-muted mt-3">支持直接拖入文件或包含标准模板的目录</p>
+    {error && <p className="wb-error" role="alert">{error}</p>}
   </div>;
 }

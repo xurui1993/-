@@ -23,6 +23,17 @@ COLUMNS = {
 }
 
 
+def filter_direction(config):
+    """None keeps all rows; bool preserves the legacy only/exclude directions.
+
+    Explicit exclude_separation=False must survive request normalization: its
+    absence belongs to historical requests with the original two-way filter.
+    """
+    if 'exclude_separation' in config:
+        return False if config['exclude_separation'] else None
+    return bool(config.get('include_separation'))
+
+
 def kept(value, include):
     hit = MARK in str(value if value is not None else '')
     return hit if include else not hit

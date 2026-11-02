@@ -131,6 +131,31 @@ class ManagerTests(unittest.TestCase):
         with self.assertRaises(jobs.DownloadRequestConflict):
             manager.create("tester", CONFIG, request_id="refresh_history_01")
 
+    def test_separation_flag_and_verified_payroll_agency_survive_durable_config(self):
+        seen=[]
+        def execute(config,*args):
+            seen.append(config)
+            return self.success_executor(config,*args)
+        manager=self.manager(execute)
+        config={**CONFIG,'include_separation':True,'task_kind':'payroll_source','payroll_agencies':{'泉州':'200'}}
+        run=manager.create('tester',config,request_id='separation_scope_01');self.wait_run(manager,run['id'])
+        self.assertTrue(seen[0]['include_separation']);self.assertEqual(seen[0]['payroll_agencies'],{'泉州':'200'})
+        with self.assertRaises(jobs.DownloadRequestConflict):manager.create('tester',{**config,'payroll_agencies':{'泉州':'201'}},request_id='separation_scope_01')
+
+    def test_all_and_excluded_scopes_survive_storage_and_never_share_idempotency_key(self):
+        seen=[]
+        def execute(config,*args):
+            seen.append(config)
+            return self.success_executor(config,*args)
+        manager=self.manager(execute)
+        for exclude in (False,True):
+            key='exclude_scope_'+str(exclude)
+            config={**CONFIG,'exclude_separation':exclude}
+            run=self.wait_run(manager,manager.create('tester',config,request_id=key)['id'])
+            self.assertIs(run['exclude_separation'],exclude);self.assertIs(seen[-1]['exclude_separation'],exclude)
+            for other in ({**CONFIG,'exclude_separation':not exclude},CONFIG):
+                with self.assertRaises(jobs.DownloadRequestConflict):manager.create('tester',other,request_id=key)
+
     def test_structured_order_progress_excludes_untrusted_text_and_nonfinite_values(self):
         def execute(config, run_dir, log, cancelled, update_item):
             update_item({"status": "running", "phase": "validating", "_run_event": True,

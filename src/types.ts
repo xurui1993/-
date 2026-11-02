@@ -37,6 +37,8 @@ export interface AppConfig {
   enableCrossStationMerge?: boolean;
   action?: string;
   payrollSourceMode?: 'manual' | 'fengshen' | 'xiaoxiang';
+  payrollOnlySeparation?: boolean;
+  payrollExcludeSeparation?: boolean;
   billingPeriodPreset?: string;
   payrollPreparationId?: string;
   preparationOnly?: boolean;

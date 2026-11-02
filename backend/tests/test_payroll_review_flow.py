@@ -39,7 +39,7 @@ class PayrollReviewFlowTests(unittest.TestCase):
                 calls.append(kwargs)
                 yield 'data: '+json.dumps({'type':'finish','status':'success','out_file':str(output),'stats':{'riders':1,'orders':10,'no_price':1,'unbound':0,'intercepted':0}})+'\n\n'
             async def run():
-                config = SimpleNamespace(payrollSourceMode='manual',payrollPreparationId='synthetic',basePath='',theme='',enableInterceptor=True,enableCrossStationMerge=False)
+                config = SimpleNamespace(payrollSourceMode='manual',payrollPreparationId='synthetic',basePath='',theme='',enableInterceptor=True,enableCrossStationMerge=False,deductionConfigVersion='rules-v1')
                 return [event async for event in inputs.run_payroll(config, SimpleNamespace())]
             from payroll_review import write_review
             with patch.object(inputs,'workspace',return_value='shared'), patch.object(inputs,'load',return_value=(root,state)), \

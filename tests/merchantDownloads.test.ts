@@ -1,7 +1,12 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {toggleDownloadDataset,selectionKey,isMerchant,datasetGroup} from '../src/lib/downloadCenterLogic.ts';
-test('current merchant downloads are selectable together while separating city-scoped sources',()=>{
- assert.deepEqual(toggleDownloadDataset(['delivery_fee','lanorange_part_price'],'invitation_records'),['invitation_records']);assert.deepEqual(toggleDownloadDataset(['invitation_records'],'attendance_detail'),['invitation_records','attendance_detail']);assert.deepEqual(toggleDownloadDataset(['invitation_records','attendance_detail'],'delivery_fee'),['delivery_fee']);assert.deepEqual(toggleDownloadDataset(['invitation_records'],'baize_employees'),['baize_employees']);assert.equal(datasetGroup('invitation_records'),'fengshen');assert(isMerchant('attendance_detail'));
+test('all stations and excluded separation are distinct selections from historical filters',()=>{
+ const base={cities:['深圳'],datasets:['delivery_fee'],start:'2026-10-01',end:'2026-10-15'};
+ const keys=[selectionKey({...base,exclude_separation:false}),selectionKey({...base,exclude_separation:true}),selectionKey(base),selectionKey({...base,include_separation:true})];
+ assert.equal(new Set(keys).size,4);
+});
+test('invitation and attendance remain selected alongside other city bills',()=>{
+ assert.deepEqual(toggleDownloadDataset(['delivery_fee','lanorange_part_price'],'invitation_records'),['delivery_fee','lanorange_part_price','invitation_records']);assert.deepEqual(toggleDownloadDataset(['invitation_records'],'attendance_detail'),['invitation_records','attendance_detail']);assert.deepEqual(toggleDownloadDataset(['invitation_records','attendance_detail'],'delivery_fee'),['invitation_records','attendance_detail','delivery_fee']);assert.deepEqual(toggleDownloadDataset(['invitation_records'],'baize_employees'),['baize_employees']);assert.equal(datasetGroup('invitation_records'),'fengshen');assert(isMerchant('attendance_detail'));
 });
 test('invitation snapshots ignore irrelevant dates, attendance selection preserves exact requested period',()=>{
  const a={cities:['当前商家'],datasets:['invitation_records'],start:'2026-10-01',end:'2026-10-31'};assert.equal(selectionKey(a),selectionKey({...a,start:'2026-01-01',end:'2026-01-02'}));assert.notEqual(selectionKey({...a,datasets:['attendance_detail']}),selectionKey({...a,datasets:['attendance_detail'],end:'2026-10-30'}));assert.notEqual(selectionKey(a),selectionKey({...a,datasets:['rider_info']}));

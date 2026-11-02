@@ -295,8 +295,8 @@ test('getDatasetCardMeta provides scopeTag, tone, and business description for d
   assert.equal(monthly.tone, 'monthly');
 
   const merchant = getDatasetCardMeta('invitation_records', '邀请记录（全量）');
-  assert.equal(merchant.scopeTag, '商家·全量');
-  assert.equal(merchant.tone, 'merchant');
+  assert.equal(merchant.scopeTag, '城市·全量');
+  assert.equal(merchant.tone, 'city');
 
   const lanorange = getDatasetCardMeta('lanorange_rider_archive', '骑手档案');
   assert.equal(lanorange.scopeTag, '全城·全量');
@@ -419,6 +419,9 @@ test('buildExecutionRailSummary formats scope rows without duplicate date hints 
   assert.equal(fengshenMulti.periodSpanBadge, '共 15 天');
   assert.equal(fengshenMulti.thirdRowLabel, '站点规则');
   assert.equal(fengshenMulti.thirdRowValue, '排除取分离');
+  const scopeInput={datasetsCount:1,cities:['深圳'],start:'2026-10-01',end:'2026-10-15',noCity:false,noDate:false,archiveOnly:false,xiaoxiangDated:false,xiaoxiangOnly:false,blueOnly:false,baizeOnly:false,merchantOnly:false,merchantSnapshotOnly:false,merchantDateValid:true,validDates:true,includeSeparation:false,subitemCount:1,submitReady:true};
+  assert.equal(buildExecutionRailSummary({...scopeInput,excludeSeparation:false}).thirdRowValue,'全部站点（含取分离）');
+  assert.equal(buildExecutionRailSummary({...scopeInput,excludeSeparation:true}).thirdRowValue,'排除取分离');
   assert.equal(fengshenMulti.listFooterText, '已选 9 类资料 · 预计 90 个采集子项');
   assert.equal(fengshenMulti.blockerHint, '');
 

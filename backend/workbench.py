@@ -114,6 +114,171 @@ async def deduction_stations(request: Request, platform: str = 'fengshen', city:
         raise HTTPException(502, '站点列表暂不可用，请检查平台连接后重试；原配置保持不变') from None
 
 
+@router.get('/station-directory')
+async def station_directory(request: Request, platform: str = 'fengshen', refresh: bool = False):
+    from download_accounts import require_account
+    from station_directory import snapshot
+    require_account(request)
+    return await asyncio.to_thread(snapshot, platform, refresh)
+
+
+@router.get('/deduction-profiles/{platform}')
+async def deduction_profiles(platform: str, request: Request):
+    from download_accounts import require_account
+    from station_directory import snapshot
+    from deduction_confirmation import station_drafts
+    require_account(request)
+    try:
+        return await asyncio.to_thread(station_drafts, platform, ROOT, snapshot(platform))
+    except SourceError as error:
+        raise HTTPException(400, str(error)) from None
+
+
+@router.put('/deduction-profiles/{platform}')
+async def update_deduction_profiles(platform: str, request: Request):
+    from download_accounts import require_admin
+    from station_directory import ready_directory
+    from deduction_confirmation import save_profile
+    require_admin(request)
+    payload = await request.json()
+    try:
+        return await asyncio.to_thread(save_profile, platform, ROOT, payload, ready_directory(platform))
+    except SourceError as error:
+        raise HTTPException(409, str(error)) from None
+
+
+@router.get('/batches/{key}/deduction-review')
+async def deduction_review(key: str, request: Request, city_id: str = '', refresh: bool = False):
+    from download_accounts import require_account
+    from payroll_inputs import load, workspace, account, directory, batch_lock
+    from station_directory import ready_directory
+    from deduction_confirmation import preflight, platform_for
+    require_account(request)
+    def read():
+        with batch_lock(directory(workspace(request), key)):
+            folder, state = load(workspace(request), key, account(request))
+            if state.get('include_separation'):
+                from station_directory import sync_separation
+                current = ready_directory('fengshen', city_id or state['plan']['city'])
+                choices = [c for c in current['cities'] if c['name'] == state['plan']['city']]
+                if not choices or choices[0]['id'] not in current.get('separation_cities', []):
+                    sync_separation(state['plan']['city'])
+            data = ready_directory(platform_for(state), city_id or state['plan']['city'], refresh=True) if refresh else ready_directory(platform_for(state), city_id or state['plan']['city'])
+            return preflight(folder, state, ROOT, data, city_id)
+    try:
+        return await asyncio.to_thread(read)
+    except SourceError as error:
+        raise HTTPException(409, str(error)) from None
+
+
+@router.post('/batches/{key}/separation')
+async def enable_separation(key: str, request: Request):
+    from download_accounts import require_admin
+    from payroll_inputs import load, save, workspace, account, batch_lock, directory, public
+    from station_directory import sync_separation
+    require_admin(request)
+    payload = await request.json()
+    if payload != {'enabled': True}:
+        raise HTTPException(400, '取分离关联参数无效')
+    def write():
+        with batch_lock(directory(workspace(request), key)):
+            folder, state = load(workspace(request), key, account(request))
+            refreshing = state.get('include_separation') is True
+            if state['mode'] != 'fengshen' or state['status'] not in ('awaiting_confirmation','pending_download','ready') or (state.get('jobs') and not refreshing) or state.get('deductions', {}).get('frozen'):
+                raise SourceError('本批次已开始获取资料或已冻结，不能改写原范围。请收起清单，点击“重新上传”新建含取分离站点的批次；原资料和文件保留。')
+            data = sync_separation(state['plan']['city'])
+            state['include_separation'] = True
+            if not state.get('jobs'):
+                state['separation_agencies'] = sorted({s.get('agency_id') or s['city_id'] for s in data['stations'] if '取分离' in s['name'] and s['city'] == state['plan']['city']})
+            if not refreshing:
+                state.pop('deduction_confirmation', None);state.pop('deduction_intent', None)
+                state['status'] = 'awaiting_confirmation'
+            save(folder, state)
+            return public(state)
+    try:
+        return await asyncio.to_thread(write)
+    except SourceError as error:
+        raise HTTPException(409, str(error)) from None
+
+
+@router.post('/batches/{key}/station-links')
+async def link_batch_stations(key: str, request: Request):
+    from download_accounts import require_admin
+    from payroll_inputs import load, save, workspace, account, directory, batch_lock
+    from station_directory import ready_directory
+    from deduction_confirmation import preflight, platform_for
+    from station_associations import LOCK as ASSOCIATION_LOCK, save as save_associations
+    require_admin(request)
+    payload = await request.json()
+    if not isinstance(payload, dict) or payload.get('confirmed') is not True or not isinstance(payload.get('links'), dict) or not payload['links']:
+        raise HTTPException(400, '请明确确认本次站点关联')
+    def write():
+        with batch_lock(directory(workspace(request), key)), ASSOCIATION_LOCK:
+            folder, state = load(workspace(request), key, account(request))
+            if state['status'] not in ('ready','awaiting_confirmation','pending_download') or state.get('deductions', {}).get('frozen'):
+                raise SourceError('本批次当前不可更改站点关联')
+            data = ready_directory(platform_for(state), payload.get('city_id') or state['plan']['city'])
+            reviewed = preflight(folder, state, ROOT, data, payload.get('city_id', ''))
+            if payload.get('review_version') != reviewed['review_version']:
+                raise SourceError('目录或资料已变化，请重新读取后关联')
+            allowed = {r['name']: set(r['candidates']) for r in reviewed['association_rows']}
+            links = dict(state.get('station_links', {}))
+            for name, target in payload['links'].items():
+                if name not in allowed or not isinstance(target, str) or (target and target not in allowed[name]):
+                    raise SourceError('关联目标不属于当前城市可核实的后台站点，或与申请编号冲突')
+                if target: links[name] = target
+                else: links.pop(name, None)
+            candidate = {**state, 'station_links': links}
+            result = preflight(folder, candidate, ROOT, data, payload.get('city_id', ''))
+            rejected = {r['name'] for r in result['unresolved']}
+            if any(target and name in rejected for name, target in payload['links'].items()):
+                raise SourceError('关联与申请编号或当前目录不一致，未保存，请重新核对')
+            if payload.get('save_associations') is True:
+                choices = {entry['key']: entry for entry in reviewed['station_choices']}
+                save_associations(ROOT, platform_for(state), data, {name:choices[target] for name,target in payload['links'].items() if target}, reviewed['association_version'])
+            state['station_links'] = links
+            state.pop('deduction_confirmation', None)
+            state.pop('deduction_intent', None)
+            state.setdefault('audit', []).append({'action':'confirm_station_links','links':payload['links'],'saved_for_reuse':payload.get('save_associations') is True,'directory_version':data['session_version'],'at':datetime.now().isoformat()})
+            save(folder, state)
+            return preflight(folder, state, ROOT, data, payload.get('city_id', ''))
+    try:
+        return await asyncio.to_thread(write)
+    except SourceError as error:
+        raise HTTPException(409, str(error)) from None
+
+
+@router.post('/batches/{key}/deduction-review')
+async def confirm_deduction_review(key: str, request: Request):
+    from download_accounts import require_account, require_admin
+    from payroll_inputs import load, save, workspace, account, directory, batch_lock, public, LOCK
+    from station_directory import ready_directory
+    from deduction_confirmation import confirm, platform_for
+    require_account(request)
+    require_admin(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(400, '扣款确认参数无效')
+    if payload.get('save_defaults') is True:
+        require_admin(request)
+    def write():
+        with batch_lock(directory(workspace(request), key)), LOCK:
+            folder, state = load(workspace(request), key, account(request))
+            if state['status'] not in ('ready', 'awaiting_confirmation', 'pending_download') or state.get('deductions', {}).get('frozen'):
+                raise SourceError('本批次不可再修改，请核对当前状态')
+            deduction, receipt = confirm(folder, state, ROOT, ready_directory(platform_for(state), payload.get('city_id') or state['plan']['city']), payload)
+            state.update(deductions=deduction, deduction_confirmation=receipt)
+            if receipt['stage'] == 'intent':
+                state['deduction_intent'] = receipt
+                state['status'] = 'pending_download'
+            save(folder, state)
+            return {**public(state), 'deduction_version': deduction['version']}
+    try:
+        return await asyncio.to_thread(write)
+    except SourceError as error:
+        raise HTTPException(409, str(error)) from None
+
+
 @router.put('/deductions')
 async def save_defaults(request: Request):
     from download_accounts import require_admin
@@ -175,6 +340,11 @@ def task_records(request: Request):
             known_jobs.update(state.get('jobs', []))
             if owner != wid:
                 continue
+            from payroll_control import reconcile
+            from payroll_inputs import batch_lock
+            with batch_lock(path.parent):
+                state = json.loads(path.read_text(encoding='utf-8'))
+                reconcile(path.parent, state)
             value = public(state)
             output = state.get('result', {}).get('output') or ''
             try:

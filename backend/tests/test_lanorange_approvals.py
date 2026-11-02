@@ -196,4 +196,15 @@ class RouteTests(unittest.TestCase):
                 with idle_guard():pass
 
 
+class PendingScopeTests(unittest.TestCase):
+    def test_scope_reads_only_own_actionable_tasks_and_no_write_or_rider_details(self):
+        with tempfile.TemporaryDirectory() as temp:
+            world=World();foreign=task('foreign');foreign['assigneeIds']='someone-else';world.tasks.append(foreign)
+            manager=jobs.ApprovalManager(Path(temp)/'test.sqlite3',world.client,lambda:world.version)
+            with patch.object(jobs,'scope',return_value='shared'),patch.object(jobs,'get_manager',return_value=manager):
+                value=jobs.pending_scope(None)
+            self.assertEqual(value['total'],2);self.assertEqual({r['id'] for r in value['rows']},{'t1','t2'})
+            self.assertFalse(world.writes);self.assertFalse(any('Detail' in path or 'complete' in path for path in world.reads))
+
+
 if __name__=='__main__':unittest.main()

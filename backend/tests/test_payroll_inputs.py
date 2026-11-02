@@ -58,7 +58,7 @@ class FakeManager:
     def get_run(self, owner, key):
         return self.run
 
-    def get_file(self, owner, run, key):
+    def get_file(self, owner, run, key, verify_integrity=True):
         return self.paths[key], self.paths[key].name
 
     def retry(self, owner, key, items, request_id):
@@ -90,12 +90,20 @@ class PayrollInputTests(unittest.TestCase):
         return path
 
     def auto(self):
-        return inputs.create(str(self.source), 'tester', 'fengshen', 'download_shared')
+        # Legacy batch fixture keeps the former strict contract; current policy is
+        # exercised separately in test_payroll_readable_policy.
+        folder,state=inputs.create(str(self.source), 'tester', 'fengshen', 'download_shared')
+        state.pop('input_policy',None);inputs.save(folder,state)
+        return folder,state
 
     def failed(self, folder, state, kind='problem'):
         for key in state['items']:
             if key == kind:
                 state['items'][key].update(status='failed', run_id='a' * 32)
+            elif key == 'payment_binding':
+                path=self.source/'binding.csv'
+                path.write_text('骑手ID,绑定情况\n00123,已绑定\n',encoding='utf-8-sig')
+                inputs.stage(folder,state,key,path,'fixture')
             elif key == 'delivery_fee':
                 inputs.stage(folder, state, key, self.delivery(), 'fixture')
             else:
@@ -140,10 +148,8 @@ class PayrollInputTests(unittest.TestCase):
         with self.client() as client:
             response = client.post(f'/api/parttime/preparations/{state["id"]}/resolve',
                                    json={'dataset': 'problem', 'action': 'omit'})
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.json()['status'], 'ready')
-            _, changed = inputs.load('tester', state['id'], 'download_shared')
-            self.assertEqual(changed['audit'][-1]['action'], 'explicit_omit')
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertIn('不支持跳过',response.text)
         self.failed(folder, state, kind='delivery_fee')
         with self.client() as client:
             response = client.post(f'/api/parttime/preparations/{state["id"]}/resolve',
@@ -153,6 +159,7 @@ class PayrollInputTests(unittest.TestCase):
     def test_supplement_validates_type_and_workspace_and_restores_readiness(self):
         folder, state = self.auto()
         self.failed(folder, state, kind='delivery_fee')
+        state['mode']='manual';inputs.save(folder,state)
         other = self.root / 'uploads' / 'other' / 'upload_extra'
         other.mkdir(parents=True)
         self.delivery(other)
@@ -183,7 +190,7 @@ class PayrollInputTests(unittest.TestCase):
         with self.assertRaisesRegex(inputs.SourceError, '修改'):
             inputs.checked_inputs(folder, state)
 
-    def test_auto_uses_fresh_city_download_without_automatic_binding(self):
+    def test_auto_uses_fresh_city_download_with_automatic_binding(self):
         folder, state = self.auto()
         manager = FakeManager({'id': 'a' * 32}, {})
         inputs.start_download(folder, state, manager)
@@ -191,11 +198,52 @@ class PayrollInputTests(unittest.TestCase):
         self.assertEqual(config['cities'], ['泉州'])
         self.assertTrue(config['refresh_history'])
         self.assertTrue(config['lanorange_by_city'])
-        self.assertNotIn('payment_binding', config['datasets'])
+        self.assertIn('payment_binding', config['datasets'])
         self.assertNotIn('baize_employees', config['datasets'])
-        self.assertEqual(state['items']['payment_binding']['status'], 'failed')
+        self.assertEqual(state['items']['payment_binding']['status'], 'pending')
         self.assertIn('lanorange_part_price', config['datasets'])
         self.assertNotIn('lanorange_full_delivery', config)
+
+    def test_confirmed_automatic_flow_downloads_binding_then_calculates_without_second_confirmation(self):
+        import copy
+        from deduction_confirmation import preflight, confirm
+        from openpyxl import load_workbook
+        (self.root/'data').mkdir()
+        (self.root/'data/config.json').write_text(json.dumps([{'城市':'泉州','团队名称':'测试站','团队ID':'100','安全基金':0}]),encoding='utf-8')
+        book=load_workbook(self.source/'template.xlsx');sheet=book['申请名单'];sheet.cell(1,6,'团队名称');sheet.cell(2,6,'测试站');book.save(self.source/'template.xlsx');book.close()
+        folder,state=self.auto()
+        directory={'platform':'fengshen','session_version':'fixture','stations':[{'platform':'fengshen','city':'泉州','city_id':'001','id':'100','name':'测试站'}]}
+        reviewed=preflight(folder,state,self.root,directory)
+        entries=copy.deepcopy(reviewed['entries'])
+        for entry in entries:
+            entry['row'].update({col:0 for col in reviewed['columns']});entry['zero_confirmed']=True
+        deduction,intent=confirm(folder,state,self.root,directory,{'entries':entries,'review_version':reviewed['review_version'],'confirmed':True,'accepted_differences':[]})
+        state.update(status='pending_download',deductions=deduction,deduction_intent=intent,deduction_confirmation=intent)
+        inputs.save(folder,state)
+        paths={}
+        for kind in inputs.LABELS:
+            if kind=='rider_monthly':
+                path=self.source/'UB.xlsx';rider_file(path)
+            elif kind=='payment_binding':
+                path=self.source/'binding.csv';path.write_text('骑手ID,绑定情况\n00123,已绑定\n',encoding='utf-8-sig')
+            else:path=self.delivery(name=kind+'.csv')
+            paths[kind]=path
+        run={'id':'a'*32,'status':'success','progress':100,'items':[{'dataset':k,'status':'success'} for k in paths],'files':[{'dataset':k,'id':k} for k in paths]}
+        manager=FakeManager(run,paths);calls=[]
+        async def engine(*args,**kwargs):
+            calls.append(kwargs)
+            yield 'data: '+json.dumps({'type':'finish','status':'success','out_file':''})+'\n\n'
+        config=SimpleNamespace(payrollSourceMode='fengshen',payrollPreparationId=state['id'],deductionConfigVersion=deduction['version'],preparationOnly=False,basePath='',theme=THEME,enableInterceptor=False,enableCrossStationMerge=False)
+        async def collect():return [event async for event in inputs.run_payroll(config,None)]
+        with patch.object(inputs,'workspace',return_value='tester'),patch.object(inputs,'account',return_value='download_shared'),patch('download_jobs.get_manager',return_value=manager),patch('station_directory.ready_directory',return_value=directory),patch('tasks.run_main_calculation_gen',engine):
+            events=asyncio.run(collect())
+        self.assertEqual(len(calls),1)
+        self.assertFalse(calls[0]['skip_binding_check']);self.assertTrue(calls[0]['strict_inputs'])
+        self.assertEqual(calls[0]['deductionRules'],deduction['rows'])
+        self.assertIn('payment_binding',manager.created[0][1]['datasets'])
+        self.assertFalse(any('"status": "paused"' in event for event in events))
+        current=inputs.load('tester',state['id'],'download_shared')[1]
+        self.assertEqual(current['status'],'calculated');self.assertFalse(current['result']['input_hashes_verified'])
 
     def test_successful_empty_file_is_ready_and_monthly_uses_whole_month(self):
         folder, state = self.auto()
@@ -212,6 +260,38 @@ class PayrollInputTests(unittest.TestCase):
         self.assertEqual(state['items']['rider_monthly']['status'], 'ready')
         self.assertIn('2026-08', state['items']['rider_monthly']['file'])
         self.assertEqual(state['status'], 'waiting_materials')
+
+    def test_normal_and_separation_inputs_preserve_both_groups_and_partial_failure(self):
+        folder,state=self.auto();state['jobs']=['normal','split'];state['job_scopes']={'normal':'normal','split':'200'}
+        for value in state['items'].values():value['status']='omitted'
+        for kind in ('delivery_fee','payment_binding'):state['items'][kind]['status']='pending'
+        paths={};runs={}
+        for scope in state['jobs']:
+            items=[];files=[]
+            for kind in ('delivery_fee','payment_binding'):
+                key=scope+'_'+kind;paths[key]=self.delivery(name=key+'.csv')
+                items.append({'dataset':kind,'status':'success'});files.append({'dataset':kind,'id':key})
+            runs[scope]={'id':scope,'items':items,'files':files}
+        manager=FakeManager(None,paths);manager.get_run=lambda _,key:runs[key]
+        runs['split']['items'][1]['status']='error'
+        inputs.collect_finished(folder,state,manager)
+        self.assertEqual(state['status'],'waiting_materials');self.assertEqual(len(state['items']['delivery_fee']['source_files']),2)
+        self.assertEqual(state['items']['payment_binding']['status'],'failed')
+        runs['split']['items'][1]['status']='success'
+        inputs.collect_finished(folder,state,manager)
+        self.assertEqual(state['status'],'ready');self.assertEqual(len(state['items']['payment_binding']['source_files']),2)
+        inputs.checked_inputs(folder,state)
+
+    def test_scoped_workbooks_merge_all_business_rows_and_shared_vendor_once(self):
+        paths=[]
+        for index in (1,2):
+            path=self.source/f'source{index}.xlsx';book=Workbook();book.active.title='绑定表';book.active.append(['骑手ID','备注']);book.active.append([f'000{index}','=literal']);book.active.cell(2,2).data_type='s'
+            shared=book.create_sheet('商翼绑定表');shared.append(['ID']);shared.append(['00099']);book.save(path);book.close();paths.append(path)
+        merged=self.source/'merged.xlsx';inputs.merge_scope_files(paths,merged)
+        book=load_workbook(merged);self.assertEqual(book['绑定表'].max_row,3);self.assertEqual(book['商翼绑定表'].max_row,2);self.assertEqual(book['绑定表']['B3'].data_type,'s');self.assertEqual(book['绑定表']['A3'].value,'0002');book.close()
+        before=merged.read_bytes();book=load_workbook(paths[1]);book['商翼绑定表']['A2']='changed';book.save(paths[1]);book.close()
+        with self.assertRaisesRegex(inputs.SourceError,'资料.*变化'):inputs.merge_scope_files(paths,merged)
+        self.assertEqual(merged.read_bytes(),before)
 
     def test_monthly_validation_failure_preserves_specific_reason(self):
         folder, state = self.auto()
@@ -286,19 +366,45 @@ class PayrollInputTests(unittest.TestCase):
             return [event async for event in inputs.run_payroll(config, request)]
         with patch('tasks.run_main_calculation_gen', calculate):
             events = asyncio.run(run())
-            self.assertTrue(any('paused' in event for event in events))
+            self.assertTrue(any('"status": "error"' in event for event in events))
             self.assertFalse(calls)
             state['items']['problem']['status'] = 'omitted'
             inputs.readiness(state)
+            from workbench import version
+            from deduction_confirmation import input_signature
+            rows=[{'城市':'泉州','团队名称':'合成站点','团队ID':'001','安全基金':0}]
+            config.deductionConfigVersion=version(rows)
+            state['deductions']={'rows':rows,'version':version(rows),'scope':'batch','frozen':False}
+            state['deduction_confirmation']={'rules_version':version(rows),'input_signature':input_signature(state),'confirmed_at':'synthetic'}
             inputs.save(folder, state)
             asyncio.run(run())
             self.assertEqual(len(calls), 1)
             self.assertTrue(calls[0][1]['force_no_price'])
-            self.assertTrue(calls[0][1]['skip_binding_check'])
+            self.assertFalse(calls[0][1]['skip_binding_check'])
             self.assertTrue(calls[0][1]['strict_inputs'])
             self.assertEqual(inputs.load('tester', state['id'], 'download_shared')[1]['status'], 'calculated')
             with self.assertRaisesRegex(inputs.SourceError, '已核算'):
                 asyncio.run(run())
+
+    def test_calculation_retry_uses_separate_directory_and_preserves_previous_attempt(self):
+        from workbench import version
+        from deduction_confirmation import input_signature
+        self.delivery();folder,state=inputs.create(str(self.source),'tester','manual')
+        rows=[{'城市':'泉州','团队名称':'测试站','团队ID':'100','安全基金':0}]
+        state.update(deductions={'rows':rows,'version':version(rows),'scope':'batch','frozen':False},deduction_confirmation={'rules_version':version(rows),'input_signature':input_signature(state)})
+        inputs.save(folder,state)
+        config=SimpleNamespace(payrollSourceMode='manual',payrollPreparationId=state['id'],deductionConfigVersion=version(rows),preparationOnly=False,basePath='',theme=THEME,enableInterceptor=False,enableCrossStationMerge=False)
+        attempts=[]
+        async def engine(*args,**kwargs):
+            path=Path(kwargs['output_root']);path.mkdir(parents=True);(path/'evidence.txt').write_text('retained',encoding='utf-8');attempts.append(path)
+            yield 'data: '+json.dumps({'type':'finish','status':'error','result_msg':'synthetic error'})+'\n\n'
+        async def run():return [event async for event in inputs.run_payroll(config,None)]
+        with patch.object(inputs,'workspace',return_value='tester'),patch('tasks.run_main_calculation_gen',engine):
+            asyncio.run(run());asyncio.run(run())
+        self.assertEqual(len(attempts),2);self.assertNotEqual(attempts[0],attempts[1])
+        self.assertTrue(all((path/'evidence.txt').read_text()=='retained' for path in attempts))
+        current=inputs.load('tester',state['id'])[1]
+        self.assertEqual(current['calculation_attempt'],2);self.assertTrue(current['deductions']['frozen'])
 
     def test_real_engine_output_marks_missing_inputs_and_removes_template_old_data(self):
         import processor

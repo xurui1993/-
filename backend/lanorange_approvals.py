@@ -347,6 +347,23 @@ def pending(request:Request,city:str='',station:str='',period:str='',page:int=1,
     scope(request);return call(lambda:get_manager().pending({'city':city,'station':station,'period':period},page,page_size))
 
 
+@router.get('/pending-scope')
+def pending_scope(request:Request):
+    scope(request)
+    def read():
+        manager=get_manager();version=manager.version()
+        with manager.factory() as api:
+            rows=[];headers={}
+            for item in api.pending():
+                if eligible(item,api.actor) or manager.blocked(api.actor,str(item['id'])):continue
+                key=str(item['businessId'])
+                if key not in headers:headers[key]=api.header(key)
+                rows.append(public_task(item,headers[key],api.actor))
+            if version!=manager.version():raise ApprovalError('蓝橙账号已变化，请重新读取待办','changed')
+            return {'rows':rows,'total':len(rows),'actor_label':api.actor_label,'session_version':version,'max_selected':MAX_SELECTED}
+    return call(read)
+
+
 @router.get('/filter-options')
 def filter_options(request:Request,refresh:bool=False):
     from lanorange_price_options import options
