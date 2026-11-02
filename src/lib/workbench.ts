@@ -327,44 +327,26 @@ export interface SidebarNavItemSpec {
 }
 
 export interface SidebarNavGroupSpec {
-  id: 'collection' | 'business' | 'archive';
-  title: '数据采集' | '核算与业务' | '归档与配置';
+  id: 'collection' | 'business' | 'archive' | 'settings';
+  title: '数据采集' | '核算与业务' | '归档与配置' | '工作台' | '系统配置';
   items: SidebarNavItemSpec[];
 }
 
 export const SIDEBAR_NAV_GROUPS: SidebarNavGroupSpec[] = [
-  {
-    id: 'collection',
-    title: '数据采集',
-    items: [
-      { id: 'fengshen', label: '风神数据', iconKey: 'compass' },
-      { id: 'lanorange', label: '蓝橙数据', iconKey: 'layers' },
-      { id: 'baize', label: '白泽商翼', iconKey: 'users-round' },
-      { id: 'xiaoxiang', label: '小象灯塔', iconKey: 'radar' },
-    ],
-  },
-  {
-    id: 'business',
-    title: '核算与业务',
-    items: [
-      { id: 'generate', label: '专项报表', iconKey: 'bar-chart-3' },
-      { id: 'payroll', label: '薪资核算', iconKey: 'wallet-cards' },
-      { id: 'approval', label: '价格审批', iconKey: 'badge-dollar-sign' },
-    ],
-  },
-  {
-    id: 'archive',
-    title: '归档与配置',
-    items: [
-      { id: 'history', label: '任务中心', iconKey: 'folder-check' },
-      { id: 'deductions', label: '扣款规则', iconKey: 'sliders-horizontal' },
-      { id: 'templates', label: '模板中心', iconKey: 'file-spreadsheet' },
-    ],
-  },
+  {id:'business',title:'工作台',items:[
+    {id:'history',label:'任务中心',iconKey:'folder-check'},
+    {id:'payroll',label:'薪资核算',iconKey:'wallet-cards'},
+    {id:'approval',label:'价格管理',iconKey:'badge-dollar-sign'},
+  ]},
+  {id:'settings',title:'系统配置',items:[
+    {id:'connections',label:'平台连接',iconKey:'layers'},
+    {id:'deductions',label:'扣款规则',iconKey:'sliders-horizontal'},
+    {id:'templates',label:'模板中心',iconKey:'file-spreadsheet'},
+  ]},
 ];
 
 export interface HeaderModuleContext {
-  groupLabel: '数据采集' | '核算与业务' | '归档与配置';
+  groupLabel: '数据采集' | '核算与业务' | '归档与配置' | '工作台';
   title: string;
   subtitle: string;
   iconKey: SidebarNavItemSpec['iconKey'];
@@ -388,7 +370,7 @@ export function getHeaderModuleContext(
   }
   if (workspaceView === 'history' && historyAll) {
     return {
-      groupLabel: '归档与配置',
+      groupLabel: '工作台',
       title: '任务中心',
       subtitle: '统一查看任务、下载结果和整理历史记录',
       iconKey: 'folder-check',

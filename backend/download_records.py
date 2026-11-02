@@ -18,7 +18,7 @@ def file_key(file):
 
 
 def group_records(runs):
-    from task_catalog import category
+    from task_catalog import category, REPORTS, PLATFORMS
     """Newest attempt determines state; source files and attempts remain intact."""
     by_id = {run['id']: run for run in runs}
     def root_for(key):
@@ -81,6 +81,9 @@ def group_records(runs):
         target = active[-1]['id'] if active else failed[-1]['run_id'] if failed else summary_failures[-1]['id'] if summary_failures else root_id
         records.append({
             'kind': category(root), 'generation_target': root.get('generation_target'),
+            'scenario_id': root.get('scenario_id'), 'title': root.get('scenario_label'),
+            'source_platform': root.get('source_platform'),
+            'systems': [key for key,label in PLATFORMS.items() if label in next((report['systems'] for report in REPORTS if report['id']==root.get('generation_target')), [])] if category(root)=='generate' else [],
             'parent_batch_id': root.get('parent_batch_id'), 'parent_workspace': root.get('parent_workspace'),
             'id': root_id, 'cities': root['cities'], 'datasets': root['datasets'],
             'start': root['start'], 'end': root['end'], 'created_at': root['created_at'],

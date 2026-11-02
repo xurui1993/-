@@ -2,7 +2,7 @@ export interface DownloadUser { id: string; username: string; role: string; enab
 export type DownloadFetch = (url: string, init?: RequestInit) => Promise<Response>;
 export interface ItemSelection { city: string; dataset: string; start: string; end: string }
 export interface Recovery { mode: 'resume_existing' | 'retry_unsubmitted' | 'blocked'; reason: string }
-export interface CreateSelection { cities: string[]; datasets: string[]; start: string; end: string; refresh_history?: boolean; include_separation?: boolean; exclude_separation?: boolean; merchant_by_city?: boolean; lanorange_by_city?: boolean; lanorange_full_delivery?: boolean; task_kind?: 'download' | 'generate'; generation_target?: string }
+export interface CreateSelection { scenario_id?:string; source_platform?:string; cities: string[]; datasets: string[]; start: string; end: string; refresh_history?: boolean; include_separation?: boolean; exclude_separation?: boolean; merchant_by_city?: boolean; lanorange_by_city?: boolean; lanorange_full_delivery?: boolean; task_kind?: 'download' | 'generate'; generation_target?: string }
 export interface RequestAttempt<T> { request_id: string; payload: T }
 // abnormal_riders（异常骑手整理生成表）只依赖蓝橙成品，交付口径与蓝橙一致。
 export const isBaize = (id: string) => id === 'baize_employees';

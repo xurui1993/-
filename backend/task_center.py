@@ -2,6 +2,7 @@
 import datetime as dt
 from contextlib import contextmanager
 import json
+import shutil
 import os
 from pathlib import Path
 import sqlite3
@@ -111,6 +112,8 @@ def select_records(records, hidden, filters):
         record['hidden'] = record['id'] in hidden and record['status'] not in ACTIVE
     archived = filters.get('archived') == '1'
     base = [r for r in records if r['hidden'] == archived]
+    if filters.get('view') == 'results':
+        base = [r for r in base if r.get('available_files', 0) > 0]
     def matches(r, ignore_status=False):
         status = filters.get('status', '')
         if not ignore_status and status and not (r['status'] in ACTIVE if status == 'active' else r['status'] in ATTENTION if status == 'attention' else r['status'] == status):
@@ -133,7 +136,8 @@ def select_records(records, hidden, filters):
     counted = [r for r in base if matches(r, ignore_status=True)]
     counts = {'all': len(counted), 'active': sum(r['status'] in ACTIVE for r in counted),
               'attention': sum(r['status'] in ATTENTION for r in counted), 'success': sum(r['status'] == 'success' for r in counted)}
-    rows = sorted((r for r in counted if matches(r)), key=lambda r: (r.get('created_at', ''), r['id']), reverse=True)
+    rows = sorted((r for r in counted if matches(r)), key=lambda r: (
+        filters.get('view') != 'results' and r['status'] in ATTENTION, r.get('created_at', ''), r['id']), reverse=True)
     return rows, counts
 
 
@@ -169,7 +173,8 @@ def listing(request: Request, page: int = 1, page_size: int = 20):
     rows, counts = select_records(records, hidden_ids(records), request.query_params)
     pages = max(1, (len(rows) + page_size - 1) // page_size)
     page = min(page, pages)
-    focus = next((r for r in records if r['id'] == request.query_params.get('focus')), None)
+    key = request.query_params.get('focus')
+    focus = next((r for r in records if r['id'] == key or key in r.get('member_ids', [])), None)
     return dict(records=rows[(page-1)*page_size:page*page_size], focused=focus, total=len(rows), page=page, pages=pages,
                 counts=counts, warnings=warnings)
 
@@ -344,7 +349,28 @@ def batch_bundle(payload: dict, request: Request):
             for key in dict.fromkeys(ids):
                 path, filename = record_bundle(manager, owner, key)
                 try:
-                    archive.write(path, f"{key[:8]}_{filename}")
+                    from download_archive import archive_component, task_archive_label
+                    record = by_id[key]
+                    label = record.get('title') or task_archive_label(record['datasets'])
+                    created = ''.join(char for char in record.get('created_at', '')[:19] if char.isdigit()) or '历史'
+                    folder = f"{archive_component(label)}_{created}_{key}"
+                    # Stream the already verified result package into its task
+                    # directory. Never extract to disk or ship nested ZIPs.
+                    used = set()
+                    with zipfile.ZipFile(path) as source:
+                        for entry in source.infolist():
+                            relative = entry.filename
+                            parts = relative.split('/')
+                            if (entry.is_dir()):
+                                continue
+                            if (not relative or '\\' in relative or ':' in relative or any(part in ('', '.', '..') for part in parts)):
+                                raise HTTPException(409, '结果包文件名称无效，已停止批量下载')
+                            target_name = f"{folder}/{relative}"
+                            if target_name.casefold() in used:
+                                raise HTTPException(409, '结果包存在同名文件，已停止批量下载')
+                            used.add(target_name.casefold())
+                            with source.open(entry) as incoming, archive.open(target_name, 'w', force_zip64=True) as outgoing:
+                                shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
                 finally:
                     path.unlink(missing_ok=True)
         return FileResponse(target, filename='批量任务结果.zip', media_type='application/zip',

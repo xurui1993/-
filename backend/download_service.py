@@ -121,7 +121,7 @@ def refresh_cities(force=False):
 
 
 def get_options():
-    from task_catalog import generators
+    from task_catalog import generators, SCENARIOS
     snapshot = city_catalog.snapshot()
     return {"cities": [{"name": name, "id": code,
                         **({"disabled": True, "note": "已下架"} if name in city_catalog.OFF_SHELF_CITIES else {})}
@@ -131,7 +131,8 @@ def get_options():
                           "group": 'baize' if key == BAIZE_DATASET else 'xiaoxiang' if key in XIAOXIANG_SELECTION else 'lanorange' if key in LANORANGE_DATASETS or key == 'abnormal_riders' else 'fengshen',
                           "scope": 'all' if key == BAIZE_DATASET or key in XIAOXIANG_SELECTION or key in LANORANGE_DATASETS or key == 'abnormal_riders' else 'city'}
                          for key, label in DATASETS.items()],
-            "generators": generators(), "timezone": "Asia/Shanghai", "order_window_days": 60}
+            "generators": generators(), "scenarios": [row for row in SCENARIOS if all(key in DATASETS for key in row['datasets'])],
+            "timezone": "Asia/Shanghai", "order_window_days": 60}
 
 
 def covered_months(start, end):

@@ -95,8 +95,8 @@ def _fingerprint(config):
     for key in ("resume_detail_from", "retry_of", "retry_items"):
         if key in config:
             public[key] = config[key]
-    for key in ('task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace'):
-        if key in config:
+    for key in ('task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace', 'scenario_id', 'source_platform', 'scenario_label'):
+        if key in config and key != 'scenario_label':
             public[key] = config[key]
     return hashlib.sha256(json.dumps(public, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -342,7 +342,7 @@ class DownloadManager:
         lanorange_by_city = config.get('lanorange_by_city') is True
         lanorange_full_delivery = config.get('lanorange_full_delivery') is True
         merchant_by_city = config.get('merchant_by_city') is True
-        business_intent = {key: config[key] for key in ('task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace') if key in config}
+        business_intent = {key: config[key] for key in ('task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace', 'scenario_id', 'source_platform', 'scenario_label') if key in config}
         if config.get('include_separation') is True: business_intent['include_separation'] = True
         if 'exclude_separation' in config: business_intent['exclude_separation'] = config['exclude_separation']
         if config.get('payroll_agencies'): business_intent['payroll_agencies'] = config['payroll_agencies']
@@ -418,7 +418,7 @@ class DownloadManager:
                 else:
                     raise DownloadArchiveError("无法分配唯一归档目录，请稍后重试；已有任务未改变")
                 run = {"id": run_id, "status": "queued", "created_at": created_at,
-                       **{key: config[key] for key in ('task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace') if key in config},
+                       **{key: config[key] for key in ('task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace', 'scenario_id', 'source_platform', 'scenario_label') if key in config},
                        **{key: config[key] for key in ('include_separation', 'exclude_separation') if key in config},
                        **({'lanorange_by_city': True} if config.get('lanorange_by_city') else {}),
                        **({'lanorange_full_delivery': True} if config.get('lanorange_full_delivery') else {}),
@@ -969,7 +969,7 @@ class DownloadManager:
             if config.get('lanorange_by_city'): requested_config['lanorange_by_city'] = True
             if config.get('lanorange_full_delivery'): requested_config['lanorange_full_delivery'] = True
             if config.get('merchant_by_city'): requested_config['merchant_by_city'] = True
-            for option in ('include_separation', 'exclude_separation', 'payroll_agencies', 'task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace'):
+            for option in ('include_separation', 'exclude_separation', 'payroll_agencies', 'task_kind', 'generation_target', 'parent_batch_id', 'parent_workspace', 'scenario_id', 'source_platform', 'scenario_label'):
                 if option in config: requested_config[option] = config[option]
             requested_config.update(cities=selected_cities, datasets=selected_datasets,
                                     retry_of=run_id, retry_items=sorted(items, key=_key))

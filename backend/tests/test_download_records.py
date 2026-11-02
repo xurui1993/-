@@ -142,12 +142,14 @@ class StorageTests(unittest.TestCase):
         with patch.object(jobs,'get_manager',return_value=self.manager),patch.object(center,'collect',return_value=(records.list_records(self.manager,'tester'),[])):
             response=center.batch_bundle({'ids':[first['id'],second['id']]},center_request('POST'))
             with zipfile.ZipFile(response.path) as archive:
-                self.assertEqual(len(archive.namelist()),2)
-                for name in archive.namelist():
-                    import io
-                    with zipfile.ZipFile(io.BytesIO(archive.read(name))) as nested:
-                        self.assertIn('任务清单.csv',nested.namelist())
-                        self.assertTrue(any(value.startswith('结果/泉州/') for value in nested.namelist()))
+                names=archive.namelist()
+                folders={name.split('/')[0] for name in names}
+                self.assertEqual(len(folders),2)
+                self.assertFalse(any(name.endswith('.zip') for name in names))
+                for folder in folders:
+                    self.assertIn(folder+'/任务清单.csv',names)
+                    self.assertTrue(any(name.startswith(folder+'/结果/泉州/') for name in names))
+                self.assertIsNone(archive.testzip())
             folder=center.directory(center_request(),first['id'])
             self.assertEqual(folder.parent,self.manager.output_root)
             self.assertTrue((folder/'文件清单.csv').is_file())

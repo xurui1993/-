@@ -1,3 +1,5 @@
+import {TaskCreationSurface} from './TaskCreationSurface';
+import {TaskScenarioCatalog,type TaskScenario} from './TaskScenarioCatalog';
 import { CollectionScope } from './CollectionScope';
 import {useStationDirectory} from '../lib/useStationDirectory';
 import {CityStationCount} from './CityStationCount';
@@ -30,6 +32,7 @@ import {
 } from '../lib/workbench';
 
 interface DownloadOptions {
+  scenarios?:TaskScenario[];
   generators?: ReportDefinition[];
   cities: { name: string; id: string; disabled?: boolean; note?: string }[];
   cities_source?: 'fengshen' | 'config';
@@ -111,6 +114,9 @@ interface DownloadRun {
 }
 
 interface Props {
+  taskHub?:boolean;
+  hubActive?:boolean;
+  onPlatformChange?:(platform:DownloadPlatform)=>void;
   platform?: DownloadPlatform;
   recordModule?: RecordModule;
   taskKind?: 'download' | 'generate';
@@ -230,7 +236,7 @@ export function FengshenDownloadCenter(props: Props) {
   return <DownloadAccountPanel apiFetch={props.apiFetch} onAccountChange={props.onAccountChange}>{(user, authenticatedFetch) => <AuthorizedDownloadCenter key={user.id} {...props} apiFetch={authenticatedFetch} user={user} />}</DownloadAccountPanel>;
 }
 
-function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, onActiveCountChange, fengshenAuthStatus, user, embedded, navigation, taskKind = 'download', platform,recordModule,hideNavigation, onTaskKindChange, onViewChange, onFormLock, onOpenPayroll, onNavigateGenerate, onNavigatePayroll, onOpenPrice, prefill }: Props & { user: DownloadUser }) {
+function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, onActiveCountChange, fengshenAuthStatus, user, embedded, navigation, taskKind = 'download', platform,recordModule,hideNavigation, onTaskKindChange, onViewChange, onFormLock, onOpenPayroll, onNavigateGenerate, onNavigatePayroll, onOpenPrice, prefill, taskHub=false, hubActive=true, onPlatformChange }: Props & { user: DownloadUser }) {
   const apiRef = useRef(apiFetch);
   apiRef.current = apiFetch;
   const [options, setOptions] = useState<DownloadOptions | null>(null);
@@ -253,7 +259,10 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const [runs, setRuns] = useState<DownloadRun[]>([]);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
   const [citySearch, setCitySearch] = useState('');
-  const [view, setView] = useState<'create' | 'history'>('create');
+  const [view, setView] = useState<'create' | 'history'>(()=>navigation?.view || (taskHub?'history':'create'));
+  const [wizardStep,setWizardStep]=useState(1);
+  const [scenarioId,setScenarioId]=useState('');
+  const pendingScenario=useRef<{scope:string;datasets:string[];id:string}|null>(null);
   useEffect(() => { if (navigation) setView(navigation.view); }, [navigation?.version]);
 
   useEffect(() => {
@@ -416,7 +425,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         setRuns(nextRuns);
         notifyFinishedRuns(nextRuns);
         let id = selectedIdRef.current;
-        if ((!id || !nextRuns.some(run => run.id === id)) && nextRuns.length) {
+        if (!id && nextRuns.length) {
           id = nextRuns[0].id;
           selectedIdRef.current = id;
           setSelectedId(id);
@@ -515,6 +524,22 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
     start: archiveOnly ? shanghaiToday() : xiaoxiangDated ? start : blueOnly||baizeOnly||merchantSnapshotOnly ? shanghaiToday() : start, end: archiveOnly ? shanghaiToday() : xiaoxiangDated ? end : blueOnly||baizeOnly||merchantSnapshotOnly ? shanghaiToday() : end,
     ...(refreshHistory && datasets.some(dataset => ['fraud', 'problem'].includes(dataset)) ? { refresh_history: true } : {}),
     ...(datasets.some(isMerchant)?{merchant_by_city:true}:{}), ...(!noCity && !merchantOnly ? { exclude_separation: excludeSeparation } : {}) };
+  const selectedScenario=options?.scenarios?.find(row=>row.id===scenarioId && row.datasets.length===datasets.length && row.datasets.every(id=>datasets.includes(id)));
+  if(taskHub && taskKind==='download' && platform){
+    currentSelection.source_platform=platform;
+    currentSelection.scenario_id=selectedScenario?.id || `custom:${platform}`;
+  }
+  useEffect(()=>{
+    const pending=pendingScenario.current;
+    if(pending?.scope===selectionScope){setDatasets(pending.datasets);setScenarioId(pending.id);pendingScenario.current=null;}
+  },[selectionScope]);
+  const chooseScenario=(choice:{kind:'download'|'generate';platform?:DownloadPlatform;datasets:string[];id:string})=>{
+    const scope=choice.kind==='generate'?'generate':choice.platform!;
+    if(scope===selectionScope){setDatasets(choice.datasets);setScenarioId(choice.id);}
+    else pendingScenario.current={scope,datasets:choice.datasets,id:choice.id};
+    if(choice.platform)onPlatformChange?.(choice.platform);
+    onTaskKindChange?.(choice.kind);setWizardStep(2);setScopeReview(null);setDuplicateApproval('');
+  };
   const currentSelectionKey = selectionKey(currentSelection);
   const matchingRun = runs.find(run => !TERMINAL_STATUSES.has(run.status) && selectionKey(run) === currentSelectionKey)
     || (!followupDatasets.length && !datasets.some(isLanorange) && !merchantOnly ? runs.find(run => selectionKey(run) === currentSelectionKey && !!run.files?.length) : undefined);
@@ -602,8 +627,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
 
   const startDownload = async (confirmedKey?: string) => {
     if (creatingRef.current || !options || (!createAttempt.current && !canSubmit)) return;
-    if (!createAttempt.current && matchingRun && !TERMINAL_STATUSES.has(matchingRun.status)) { selectRun(matchingRun); return; }
-    if (!createAttempt.current && completedMatch && duplicateApproval !== currentSelectionKey) { selectRun(matchingRun!); return; }
+    if (!createAttempt.current && matchingRun && !TERMINAL_STATUSES.has(matchingRun.status)) { setScopeReview(null);setHistoryFocusId(matchingRun.id);selectRun(matchingRun);return; }
+    if (!createAttempt.current && completedMatch && duplicateApproval !== currentSelectionKey) { setScopeReview(null);setHistoryFocusId(matchingRun!.id);selectRun(matchingRun!);return; }
     if (!createAttempt.current && confirmedKey !== currentSelectionKey) { setScopeReview(JSON.parse(JSON.stringify(currentSelection))); return; }
     createAttempt.current = retainAttempt(createAttempt.current, currentSelection);
     storeAttempt(createStorageKey, createAttempt.current);
@@ -627,7 +652,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         id: run.id,
         name: run.datasets.map(datasetLabel).join('、'),
       });
-      if (taskKind === 'generate') selectRun(run);
+      if (taskHub) {setScopeReview(null);setWizardStep(1);setHistoryFocusId(run.id);setView('history');}
+      else if (taskKind === 'generate') selectRun(run);
       void refreshRef.current();
     } catch (error) {
       const rejected = error instanceof DownloadRequestError && [400, 401, 403, 404, 409, 415, 422].includes(error.status);
@@ -818,6 +844,25 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
   const primaryButton = 'wb-primary';
   const fieldStyle = 'min-w-0 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-sky-600 focus:outline-none [color-scheme:light]';
 
+  const confirmation=scopeReview&&<div className="tc-confirmation">
+        {!taskHub&&<TaskFlowSteps status="review" />}
+        <dl className="wb-scope-review"><dt>本次业务</dt><dd>{scopeReview!.task_kind === 'generate' ? '业务报表生成' : '资料下载'}</dd>
+        <dt>资料或报表</dt><dd>{scopeReview!.datasets.map(datasetLabel).join('、')}</dd>
+        <dt>来源平台</dt><dd>{scopeReview.task_kind==='generate'?options?.generators?.find(row=>row.id===scopeReview.generation_target)?.systems?.join(' / '):DOWNLOAD_PLATFORMS.find(row=>row.id===scopeReview.source_platform)?.label||[...new Set(scopeReview.datasets.map(datasetGroup))].map(group=>DOWNLOAD_PLATFORMS.find(row=>row.id===group)?.label||group).join(' / ')}</dd>
+        <dt>预期产出</dt><dd>{scopeReview.task_kind==='generate'?'目标专项报表；来源原件可在详情中按需领取。':'所选原始资料成套下载；各资料按平台实际范围交付。'}</dd>
+        <dt>城市范围</dt><dd>{scopeReview!.datasets.length===1&&isRiderArchive(scopeReview!.datasets[0]) ? '账号全部站点 · 当前快照' : scopeReview!.datasets.every(isXiaoxiang) ? '账号可访问全部城市 · 日期区间导出' : scopeReview!.datasets.every(isGlobalDataset) ? '全部城市 · 按现有全量规则' : scopeReview!.cities.join('、')}</dd>
+        {scopeReview!.exclude_separation !== undefined && <><dt>站点范围</dt><dd>{scopeReview!.exclude_separation ? '排除取分离站点' : '全部站点（含取分离）'}</dd></>}
+        <dt>日期范围</dt><dd>{scopeReview!.datasets.length===1&&isRiderArchive(scopeReview!.datasets[0])?'当前快照，不按日期筛选':scopeReview!.datasets.every(isMerchantSnapshot)?'邀请记录全量，不按日期筛选':scopeReview!.datasets.every(isGlobalDataset) ? '全量交付，不按所选日期筛选' : `${scopeReview!.start} 至 ${scopeReview!.end}`}</dd></dl>
+        {scopeReview!.datasets.includes('invitation_records')&&<p className="wb-muted">邀请记录按所选城市获取全量快照，不按日期筛选；出勤按城市全部可见站点获取。其他资料沿用各自规则。</p>}
+        <p className="wb-notice">这是新建任务。继续已有任务请返回任务中心；页面关闭或返回修改不会提交导出。</p>
+        {scopeReview!.task_kind === 'generate' && <p className="wb-muted">系统按既有规则关联来源资料；关键资料不完整时保留任务并提示处理，不代表所有来源均可自动复用。</p>}
+        <div className="wb-row"><button type="button" className="wb-button" onClick={() => setScopeReview(null)}>返回修改范围</button><button type="button" className="wb-primary" disabled={creating} onClick={() => {
+          const key=selectionKey(scopeReview); setScopeReview(null);
+          if (key !== currentSelectionKey) { setRequestError('范围已发生变化，请重新确认后创建任务'); return; }
+          void startDownload(key);
+        }}>确认并创建任务</button></div>
+  </div>;
+
   return (
     <div className="relative z-10 mx-auto flex w-full max-w-full min-w-0 flex-col gap-4 pb-5 text-slate-900">
       {!embedded && <header className="flex flex-wrap items-center justify-between gap-3">
@@ -846,7 +891,13 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
         const stageMeta = getStageHeaderMeta(taskKind === 'generate' ? 'generate' : 'download', platform, view);
         return (
           <>
-            {view === 'create' && <>
+            {view === 'create' && (!taskHub||hubActive) && <TaskCreationSurface enabled={taskHub} step={scopeReview?3:uncertainCreate?2:wizardStep}
+                onClose={()=>{setScopeReview(null);setView('history');}}
+                catalog={<>{optionsError&&<p role="alert" className="wb-error">{optionsError}</p>}{!options?<p>正在读取业务场景…</p>:<TaskScenarioCatalog scenarios={options.scenarios||[]} reports={options.generators||[]} disabled={formLocked} onSelect={chooseScenario}/>}</>}
+                review={confirmation}
+                footer={<footer className="tc-create-footer"><button className="wb-button" disabled={formLocked} onClick={()=>setWizardStep(1)}>返回选择场景</button><span className="wb-muted">{taskKind==='generate'?selectedReport?.label:selectedScenario?.label||'自定义资料'} · {datasets.length} 类资料</span><button className="wb-primary" disabled={creating||(!uncertainCreate&&!canSubmit)} onClick={()=>void startDownload()}>{creating?'提交中…':uncertainCreate?'重新确认原请求':matchingRun&&(!completedMatch||duplicateApproval!==currentSelectionKey)?'查看已有任务':'下一步：确认产出'}</button></footer>}>
+                {taskHub&&<div className="tc-create-context"><strong>{taskKind==='generate'?selectedReport?.label:selectedScenario?.label||'自定义资料'}</strong><span>{taskKind==='generate'?'系统自动关联来源资料':DOWNLOAD_PLATFORMS.find(row=>row.id===platform)?.label}</span></div>}
+                <div className={taskHub?'tc-config-form':undefined}>
               <section className={taskKind === 'generate' ? 'rb-shell' : `${panel} wb-task-form wb-download-workbench ${noCity && noDate ? 'is-simple-collection' : ''}`} aria-label={taskKind === 'generate' ? '业务报表配置' : '新建下载配置'}>
                 {taskKind === 'download' && !embedded && <div className="wb-form-heading">
                   <div className="wb-stage-heading-left">
@@ -860,7 +911,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
             : !options ? <p role="status" className="flex items-center gap-2 p-6 text-sm text-slate-500"><Loader2 size={16} />正在加载下载选项…</p>
             : <>
               {optionsError && <p role="alert" className="wb-full-span flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 sm:px-6"><AlertCircle size={14} />城市清单刷新失败，仍显示上次结果：{optionsError}</p>}
-              {taskKind === 'generate' && <ReportBuilder
+              {taskKind === 'generate' && <ReportBuilder hideCatalog={taskHub} hideSubmit={taskHub}
                 reports={(options.generators || []).filter(report => options.datasets.some(dataset => dataset.id === report.id))} selectedId={datasets[0] || ''}
                 onSelect={id => { setDatasets([id]); setDuplicateApproval(''); }}
                 cities={options.cities} selectedCities={cities} onCities={setCities}
@@ -1080,7 +1131,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                   {orderWindowWarning && <p role="alert" className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">欺诈单和问题单仅支持最近 {orderWindowDays} 天（{earliestOrder} 至 {shanghaiToday()}），请调整日期或取消这两类资料。</p>}
                 </fieldset>}
 
-                <fieldset aria-labelledby="download-datasets-label" className="wb-step-card">
+                <details open={!taskHub||!selectedScenario} className="tc-dataset-details"><summary>{selectedScenario?`包含 ${datasets.length} 类资料 · 展开可调整为自定义任务`:'选择采集资料'}</summary><fieldset aria-labelledby="download-datasets-label" className="wb-step-card">
                   {!platform && (
                     <div className="wb-step-card-header">
                       <div className="wb-step-badge">
@@ -1130,7 +1181,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                                   checked={selected}
                                   disabled={formLocked}
                                   onChange={() => {
-                                    setDatasets(values => toggleDownloadDataset(values, dataset.id));
+                                    setDatasets(values => taskHub&&isXiaoxiang(dataset.id)?values.includes(dataset.id)?[]:[dataset.id]:toggleDownloadDataset(values, dataset.id));
                                     if (dataset.id === 'attendance_detail') {
                                       if (end > attendanceLast) setEnd(attendanceLast);
                                       if (start > attendanceLast) setStart(attendanceLast);
@@ -1153,13 +1204,13 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                       </div>
                     );
                   })}
-                </fieldset>
+                </fieldset></details>
 
                 {uncertainCreate && <p className="wb-notice mt-3">原请求资料：{createAttempt.current?.payload.datasets.map(datasetLabel).join('、')}。本次继续确认原请求，分类不改变其内容。</p>}
                 {uncertainCreate && <p role="status" className="mt-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">上次提交结果尚未确认，已锁定原选择。请点击“重新确认原请求”，继续确认同一任务。</p>}
                 {!uncertainCreate && matchingRun && <div className="mt-3 rounded-lg bg-sky-50 border border-sky-200 p-3 text-xs text-sky-800 space-y-2"><p>{completedMatch ? '相同选择已有文件，可直接查看和下载。' : '相同选择已有任务正在执行，可直接查看进度。'}</p>{completedMatch && <label className="flex items-center gap-2"><input type="checkbox" checked={duplicateApproval === currentSelectionKey} disabled={creating} onChange={event => setDuplicateApproval(event.target.checked ? currentSelectionKey : '')} />重新采集，创建新版本</label>}</div>}
               </div>
-              <aside className="wb-task-preview wb-preview-compact" aria-label="本次任务已选清单与执行">
+              {!taskHub&&<aside className="wb-task-preview wb-preview-compact" aria-label="本次任务已选清单与执行">
                 {!(noCity && noDate) && <div className="wb-compact-rail-top">
                   <div className="wb-compact-rail-header">
                     <div className="wb-compact-rail-title">
@@ -1309,33 +1360,18 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
                     )}
                   </div>
                 </div>
-              </aside>
+              </aside>}
               </>}
             </>}
         </section>
-      </>}
+        </div></TaskCreationSurface>}
           </>
         );
       })()}
 
-      {scopeReview && <WorkbenchDrawer title="确认新任务范围" onClose={() => setScopeReview(null)}>
-        <TaskFlowSteps status="review" />
-        <dl className="wb-scope-review"><dt>本次业务</dt><dd>{scopeReview.task_kind === 'generate' ? '业务报表生成' : '资料下载'}</dd>
-        <dt>资料或报表</dt><dd>{scopeReview.datasets.map(datasetLabel).join('、')}</dd>
-        <dt>城市范围</dt><dd>{scopeReview.datasets.length===1&&isRiderArchive(scopeReview.datasets[0]) ? '账号全部站点 · 当前快照' : scopeReview.datasets.every(isXiaoxiang) ? '账号可访问全部城市 · 日期区间导出' : scopeReview.datasets.every(isGlobalDataset) ? '全部城市 · 按现有全量规则' : scopeReview.cities.join('、')}</dd>
-        {scopeReview.exclude_separation !== undefined && <><dt>站点范围</dt><dd>{scopeReview.exclude_separation ? '排除取分离站点' : '全部站点（含取分离）'}</dd></>}
-        <dt>日期范围</dt><dd>{scopeReview.datasets.length===1&&isRiderArchive(scopeReview.datasets[0])?'当前快照，不按日期筛选':scopeReview.datasets.every(isMerchantSnapshot)?'邀请记录全量，不按日期筛选':scopeReview.datasets.every(isGlobalDataset) ? '全量交付，不按所选日期筛选' : `${scopeReview.start} 至 ${scopeReview.end}`}</dd></dl>
-        {scopeReview.datasets.includes('invitation_records')&&<p className="wb-muted">邀请记录按所选城市获取全量快照，不按日期筛选；出勤按城市全部可见站点获取。其他资料沿用各自规则。</p>}
-        <p className="wb-notice">这是新建任务。继续已有任务请返回任务中心；页面关闭或返回修改不会提交导出。</p>
-        {scopeReview.task_kind === 'generate' && <p className="wb-muted">系统按既有规则关联来源资料；关键资料不完整时保留任务并提示处理，不代表所有来源均可自动复用。</p>}
-        <div className="wb-row"><button type="button" className="wb-button" onClick={() => setScopeReview(null)}>返回修改范围</button><button type="button" className="wb-primary" disabled={creating} onClick={() => {
-          const key=selectionKey(scopeReview); setScopeReview(null);
-          if (key !== currentSelectionKey) { setRequestError('范围已发生变化，请重新确认后创建任务'); return; }
-          void startDownload(key);
-        }}>确认并创建任务</button></div>
-      </WorkbenchDrawer>}
+      {!taskHub && scopeReview && <WorkbenchDrawer title="确认新任务范围" onClose={() => setScopeReview(null)}>{confirmation}</WorkbenchDrawer>}
 
-      {view === 'history' && (() => {
+      {(taskHub || view === 'history') && (() => {
         const stageMeta = getStageHeaderMeta(taskKind === 'generate' ? 'generate' : 'download', platform, 'history');
         return (
           <div className={recordModule ? `${panel} wb-task-form wb-stage-history-card` : undefined}>
@@ -1353,7 +1389,7 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
               </div>
             )}
             <div className={recordModule ? 'wb-stage-history-body' : undefined}>
-              <DownloadRecords initialRunId={historyFocusId} onInitialFocusHandled={()=>setHistoryFocusId('')} key={recordModule||'all'} recordModule={recordModule} apiFetch={apiFetch} workspaceId={workspaceId} selectedRunId={selectedId}
+              <DownloadRecords onNewTask={taskHub?()=>{setScopeReview(null);setWizardStep(1);setView('create');}:undefined} initialRunId={historyFocusId} onInitialFocusHandled={()=>setHistoryFocusId('')} key={recordModule||'all'} recordModule={recordModule} apiFetch={apiFetch} workspaceId={workspaceId} selectedRunId={selectedId}
                 datasetLabel={id => id === 'payroll' ? '兼职薪资核算' : datasetLabel(id)} refreshVersion={navigation?.version} unified onOpenPayroll={onOpenPayroll}
                 onNavigateGenerate={onNavigateGenerate}
                 onNavigatePayroll={onNavigatePayroll}
@@ -1413,7 +1449,8 @@ function AuthorizedDownloadCenter({ apiFetch, workspaceId, onOpenFengshenLogin, 
               </details>}
               <details className="border-t border-slate-200 pt-3 text-xs text-slate-500"><summary className="cursor-pointer w-fit">任务信息与保存位置</summary><div className="mt-3 space-y-2"><p>编号：{selectedRun.archive_code || selectedRun.id.slice(0, 6).toUpperCase()}</p><p className="break-all">任务目录：{selectedRun.archive_relative_dir || '旧版任务保留原存放位置'}</p><p>城市：{selectedRun.cities.join('、')}</p><p>资料：{selectedRun.datasets.map(datasetLabel).join('、')}</p>{selectedRun.retry_of && <p>此任务处理原任务 {selectedRun.retry_of.slice(0, 6).toUpperCase()} 的未完成项。</p>}{selectedRun.recovery_of && <p>此任务恢复原有平台导出。</p>}{!activeRun && <button type="button" className={smallButton} disabled={rawBusy} onClick={() => void downloadRawBundle()}>下载已保留原始资料</button>}{selectedRun.last_activity_at && <p>最近进展：{displayTime(selectedRun.last_activity_at)}</p>}{!activeRun && <button type="button" className={smallButton} disabled={!!downloadingSummaryId} onClick={() => void downloadSummary()}>{downloadingSummaryId ? <Loader2 size={14} /> : <Download size={14} />}下载说明</button>}</div></details>
 
-              {!!selectedRun.logs?.length && <details className="border-t border-slate-200 pt-3 text-xs text-slate-600"><summary className="cursor-pointer w-fit">执行日志</summary><div className="mt-3 max-h-48 space-y-2 overflow-y-auto font-mono bg-slate-50 border border-slate-200 rounded-lg p-3">{selectedRun.logs.map((log, index) => <p key={index} className="break-words"><span className="mr-2 text-slate-400">{displayTime(log.time)}</span>{log.message}</p>)}</div></details>}
+              {taskHub&&!!selectedRun.logs?.length&&<section aria-label="最近业务动态"><h4>最近业务动态</h4>{selectedRun.logs.slice(-5).map((log,index)=><p key={index} className="wb-muted"><time>{displayTime(log.time)}</time> {log.message}</p>)}</section>}
+              {!!selectedRun.logs?.length && <details className="border-t border-slate-200 pt-3 text-xs text-slate-600"><summary className="cursor-pointer w-fit">完整执行日志与诊断</summary><div className="mt-3 max-h-48 space-y-2 overflow-y-auto font-mono bg-slate-50 border border-slate-200 rounded-lg p-3">{selectedRun.logs.map((log, index) => <p key={index} className="break-words"><span className="mr-2 text-slate-400">{displayTime(log.time)}</span>{log.message}</p>)}</div></details>}
             </div>}
         </>}
               />

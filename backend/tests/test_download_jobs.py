@@ -144,6 +144,32 @@ class ManagerTests(unittest.TestCase):
         with self.assertRaises(jobs.DownloadRequestConflict):
             manager.create("tester", CONFIG, request_id="refresh_history_01")
 
+    def test_scenario_identity_and_frozen_title_survive_reload_and_retry(self):
+        def execute(*args):
+            raise RuntimeError('isolated failure before submission')
+        config = {**CONFIG, 'task_kind': 'download', 'source_platform': 'fengshen',
+                  'scenario_id': 'custom:fengshen', 'scenario_label': '自定义资料 · 风神'}
+        manager = self.manager(execute)
+        run = self.wait_run(manager, manager.create('tester', config, request_id='scenario_fixture')['id'])
+        with self.assertRaises(jobs.DownloadRequestConflict):
+            manager.create('tester', {**config, 'scenario_id': 'different'}, request_id='scenario_fixture')
+        # Labels are presentation metadata, not a new operation identity.
+        same = manager.create('tester', {**config, 'scenario_label': 'changed'}, request_id='scenario_fixture')
+        self.assertEqual(same['id'], run['id'])
+        manager.shutdown()
+        restored = self.manager(execute)
+        item = {key: run['items'][0][key] for key in ('city', 'dataset', 'start', 'end')}
+        with patch.object(restored, '_recovery_info', return_value={'mode': 'resubmit'}):
+            retry = self.wait_run(restored, restored.retry('tester', run['id'], [item], 'scenario_retry')['id'])
+        rows = restored.record_snapshots('tester')
+        for saved in (restored.get_run('tester', run['id']), retry, *rows):
+            for key in ('scenario_id', 'source_platform', 'scenario_label'):
+                self.assertEqual(saved[key], config[key])
+        from download_records import group_records
+        grouped = group_records(rows)
+        self.assertEqual(len(grouped), 1)
+        self.assertEqual(grouped[0]['title'], config['scenario_label'])
+
     def test_separation_flag_and_verified_payroll_agency_survive_durable_config(self):
         seen=[]
         def execute(config,*args):

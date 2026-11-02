@@ -150,10 +150,10 @@ test('breadcrumb and sidebar status helpers reflect active view and batch state'
   assert.equal(getPayrollSidebarBadge(undefined, false), null);
 });
 
-test('sidebar navigation converges into 3 groups with concise 4-character labels (including 白泽商翼) and unique semantic icons', () => {
+test('sidebar navigation starts with the task hub and keeps platform collection inside task creation', () => {
   assert.deepEqual(
     SIDEBAR_NAV_GROUPS.map(group => group.title),
-    ['数据采集', '核算与业务', '归档与配置'],
+    ['工作台', '系统配置'],
   );
   assert.deepEqual(
     DOWNLOAD_PLATFORMS.map(platform => platform.navLabel),
@@ -162,7 +162,7 @@ test('sidebar navigation converges into 3 groups with concise 4-character labels
   const allItems = SIDEBAR_NAV_GROUPS.flatMap(group => group.items);
   assert.deepEqual(
     allItems.map(item => item.label),
-    ['风神数据', '蓝橙数据', '白泽商翼', '小象灯塔', '专项报表', '薪资核算', '价格审批', '任务中心', '扣款规则', '模板中心'],
+    ['任务中心', '薪资核算', '价格管理', '平台连接', '扣款规则', '模板中心'],
   );
   assert.ok(allItems.every(item => item.label.length === 4), 'Every sidebar item label should be exactly 4 Chinese characters');
   const iconSet = new Set(allItems.map(item => item.iconKey));
@@ -178,7 +178,7 @@ test('Scheme B header context and multi-platform status cluster map module group
   });
   assert.equal(getHeaderModuleContext('create', 'download', 'baize', false).title, '白泽商翼');
   assert.equal(getHeaderModuleContext('create', 'generate', 'fengshen', false).groupLabel, '核算与业务');
-  assert.equal(getHeaderModuleContext('history', 'download', 'fengshen', true).groupLabel, '归档与配置');
+  assert.equal(getHeaderModuleContext('history', 'download', 'fengshen', true).groupLabel, '工作台');
 
   const cluster = getPlatformStatusCluster(
     {

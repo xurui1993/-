@@ -7,6 +7,7 @@ import {CityStationCount} from './CityStationCount';
 
 interface City { id:string; name:string; disabled?:boolean; note?:string }
 interface Props {
+  hideCatalog?:boolean; hideSubmit?:boolean;
   reports:ReportDefinition[]; selectedId:string; onSelect:(id:string)=>void;
   cities:City[]; selectedCities:string[]; onCities:(cities:string[])=>void;
   start:string; end:string; today:string; onStart:(value:string)=>void; onEnd:(value:string)=>void;
@@ -49,7 +50,7 @@ export function ReportBuilder(props:Props) {
   const citySummary=selectedCities.length?`${selectedCities.slice(0,3).join('、')}${selectedCities.length>3?`等 ${selectedCities.length} 城`:''}`:'请选择城市';
   const hint=!report?'请选择报表':!range?'请选择有效的时间范围':report.scope==='all'?'全部城市 · 当前全量':!selectedCities.length?'请选择至少一个城市':report.scope==='city_month'?`${selectedCities.length} 个城市 × ${range.months} 个月份`:`${selectedCities.length} 个城市 · ${range.start} 至 ${range.end}`;
   return <section className="rb-builder" aria-label="专项报表生成">
-    <aside className="rb-catalog" aria-label="报表目录">
+    {!props.hideCatalog&&<aside className="rb-catalog" aria-label="报表目录">
       <h2>专项报表</h2>
       {reports.length>6&&<label className="rb-report-search"><Search size={14}/><input aria-label="搜索报表" placeholder="搜索报表" value={reportSearch} onChange={e=>setReportSearch(e.target.value)}/></label>}
       <div className="rb-report-list" role="radiogroup" aria-label="选择业务报表">
@@ -57,7 +58,7 @@ export function ReportBuilder(props:Props) {
           <FileSpreadsheet size={18}/><span><strong>{item.label}</strong><small>{item.scope==='city_month'?'按城市 · 按月':item.scope==='city_range'?'按城市 · 按日期':'全部城市 · 全量'}</small></span>{selectedId===item.id&&<Check size={15}/>}</button>)}
       </div>
       {!reports.length&&<p className="rb-muted">暂无可用报表。</p>}
-    </aside>
+    </aside>}
     <div className="rb-configuration">
       <header className="rb-heading"><div><h3>{report?.label||'选择业务报表'}</h3><p>{report?.description||'从左侧选择需要生成的报表。'}</p></div><span className="rb-systems">{report?.systems?.join(' / ')}</span></header>
       {report&&<>
@@ -87,7 +88,7 @@ export function ReportBuilder(props:Props) {
       </>}
       {props.uncertain&&<p className="rb-notice" role="status">上次提交结果尚未确认，范围已锁定。请确认原请求，避免重复创建。</p>}
       {props.duplicate&&!props.uncertain&&<div className="rb-notice"><p>相同范围已有结果，可直接查看。</p><label><input type="checkbox" checked={props.recollect} disabled={locked} onChange={e=>props.onRecollect(e.target.checked)}/>重新采集，生成新版本</label></div>}
-      <footer className="rb-footer"><div><strong>{hint}</strong>{report?.station_rule==='separation'&&report.scope!=='all'&&<small>{props.includeSeparation?'仅取分离站点':'排除取分离站点'}</small>}</div><button type="button" className="wb-primary" disabled={props.disabled||!report||!range} onClick={props.onSubmit}><FileSpreadsheet size={16}/>{props.creating?'提交中…':props.submitLabel}</button></footer>
+      {!props.hideSubmit&&<footer className="rb-footer"><div><strong>{hint}</strong>{report?.station_rule==='separation'&&report.scope!=='all'&&<small>{props.includeSeparation?'仅取分离站点':'排除取分离站点'}</small>}</div><button type="button" className="wb-primary" disabled={props.disabled||!report||!range} onClick={props.onSubmit}><FileSpreadsheet size={16}/>{props.creating?'提交中…':props.submitLabel}</button></footer>}
     </div>
   </section>;
 }
